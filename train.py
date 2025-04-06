@@ -47,19 +47,10 @@ def parse_args():
     return parser.parse_args()
 
 def collate_fn(batch):
-    """Process batches of valid nodes only
-    Returns:
-        features: [batch, seq_len, 2139, 3]
-        targets: [batch, 2139]
-        valid_mask: [batch, 2139] (all True since we're using only valid pixels)
-    """
+    """Process batches for spatial-temporal input"""
     features = torch.stack([item[0] for item in batch])  # [batch, seq_len, 2139, 3]
     targets = torch.stack([item[1] for item in batch])   # [batch, 2139]
-    
-    # Since we're only using valid pixels, all positions are valid
-    valid_mask = torch.ones_like(targets, dtype=torch.bool)
-    
-    return features, targets, valid_mask
+    return features, targets
 
 def compute_metrics(y_true, y_pred, valid_mask):
     """Mask invalid pixels"""
@@ -199,9 +190,9 @@ def main():
             x = x.to(device)  # [batch, seq_len, 2139, 3]
             y = y.to(device)  # [batch, 2139]
             # Flatten spatial dimensions and apply mask
-            batch_size = x.size(0)
-            y = y.view(batch_size, -1)  # (batch, height*width)
-            valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+            # batch_size = x.size(0)
+            # y = y.view(batch_size, -1)  # (batch, height*width)
+            # valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
                 
             optimizer.zero_grad()
                 
@@ -209,7 +200,7 @@ def main():
             pred = model(x)
                 
             # Calculate masked loss
-            loss = loss_fn(pred[valid_mask], y[valid_mask])
+            loss = loss_fn(pred, y)
             loss.backward()
             optimizer.step()
                 
