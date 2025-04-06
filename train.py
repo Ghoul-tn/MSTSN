@@ -1,10 +1,12 @@
 import argparse
 import os
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, random_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from tqdm import tqdm
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
 from models.MSTSN import MSTSN_Gambia
-from tqdm import tqdm
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train MSTSN for Drought Prediction')
@@ -43,19 +45,47 @@ def parse_args():
     
     return parser.parse_args()
 
+def compute_metrics(y_true, y_pred):
+    """Calculate all regression metrics"""
+    return {
+        'mse': mean_squared_error(y_true, y_pred),
+        'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
+        'mae': mean_absolute_error(y_true, y_pred),
+        'r2': r2_score(y_true, y_pred)
+    }
+
+def evaluate(model, dataloader, device):
+    """Evaluate model on a dataloader and return metrics"""
+    model.eval()
+    all_preds = []
+    all_targets = []
+    
+    with torch.no_grad():
+        for x, y in dataloader:
+            x, y = x.to(device), y.to(device)
+            preds = model(x)
+            all_preds.append(preds.cpu().numpy())
+            all_targets.append(y.cpu().numpy())
+    
+    y_true = np.concatenate(all_targets)
+    y_pred = np.concatenate(all_preds)
+    
+    return compute_metrics(y_true, y_pred)
+
 def main():
     args = parse_args()
     
-    # Create results directory
+    # Setup directories and device
     os.makedirs(args.results_dir, exist_ok=True)
-    print(f"\nSaving results to: {args.results_dir}")
-    
-    # Initialize data
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"\nUsing device: {device}")
+    print(f"Results will be saved to: {args.results_dir}")
+
+    # Load and prepare data
     print("\n=== Loading Data ===")
     processor = GambiaDataProcessor(args.data_path)
     features, targets = processor.process_data()
     
-    # Create datasets
     dataset = GambiaDroughtDataset(
         features=features,
         targets=targets,
@@ -63,29 +93,27 @@ def main():
         seq_len=args.seq_len
     )
     
-    # Split datasets
+    # Split data
     train_size = int(0.8 * len(dataset))
     train_set, val_set = random_split(
         dataset, 
         [train_size, len(dataset) - train_size],
-        generator=torch.Generator().manual_seed(42)  # For reproducibility
+        generator=torch.Generator().manual_seed(42)
     )
     
-    # Create data loaders
     train_loader = DataLoader(
-        train_set, 
-        batch_size=args.batch_size, 
+        train_set,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=2
     )
     val_loader = DataLoader(
-        val_set, 
+        val_set,
         batch_size=args.batch_size,
         num_workers=2
     )
-    
+
     # Initialize model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = MSTSN_Gambia(
         adj_matrix=processor.adj_matrix,
         gcn_dim1=args.gcn_dim1,
@@ -96,28 +124,31 @@ def main():
     
     # Training setup
     optimizer = torch.optim.AdamW(
-        model.parameters(), 
-        lr=args.lr, 
+        model.parameters(),
+        lr=args.lr,
         weight_decay=args.weight_decay
     )
     loss_fn = torch.nn.MSELoss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='min', 
-        patience=5, 
+        optimizer,
+        mode='min',
+        patience=5,
         factor=0.5,
         verbose=True
     )
-    
+
     # Training loop
-    best_val_loss = float('inf')
-    history = {'train_loss': [], 'val_loss': []}
+    best_val_rmse = float('inf')
+    history = {'train': [], 'val': []}
     
     print("\n=== Starting Training ===")
     for epoch in range(args.epochs):
         # Training phase
         model.train()
         train_loss = 0.0
+        train_preds = []
+        train_targets = []
+        
         with tqdm(train_loader, unit="batch") as tepoch:
             for x, y in tepoch:
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
@@ -131,50 +162,58 @@ def main():
                 optimizer.step()
                 
                 train_loss += loss.item()
+                train_preds.append(pred.detach().cpu().numpy())
+                train_targets.append(y.detach().cpu().numpy())
                 tepoch.set_postfix(loss=loss.item())
         
+        # Calculate training metrics
+        train_metrics = compute_metrics(
+            np.concatenate(train_targets),
+            np.concatenate(train_preds)
+        )
+        train_metrics['loss'] = train_loss / len(train_loader)
+        history['train'].append(train_metrics)
+        
         # Validation phase
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(device), y.to(device)
-                pred = model(x)
-                val_loss += loss_fn(pred, y).item()
+        val_metrics = evaluate(model, val_loader, device)
+        history['val'].append(val_metrics)
+        scheduler.step(val_metrics['rmse'])
         
-        # Update learning rate
-        scheduler.step(val_loss)
-        
-        # Calculate epoch metrics
-        train_loss /= len(train_loader)
-        val_loss /= len(val_loader)
-        history['train_loss'].append(train_loss)
-        history['val_loss'].append(val_loss)
-        
-        print(f"Epoch {epoch+1}: "
-              f"Train Loss: {train_loss:.4f}, "
-              f"Val Loss: {val_loss:.4f}, "
-              f"LR: {optimizer.param_groups[0]['lr']:.2e}")
+        # Print epoch summary
+        print(f"\nEpoch {epoch+1} Summary:")
+        print(f"  Training - Loss: {train_metrics['loss']:.4f} | "
+              f"MSE: {train_metrics['mse']:.4f} | "
+              f"RMSE: {train_metrics['rmse']:.4f} | "
+              f"MAE: {train_metrics['mae']:.4f} | "
+              f"R²: {train_metrics['r2']:.4f}")
+        print(f"  Validation - MSE: {val_metrics['mse']:.4f} | "
+              f"RMSE: {val_metrics['rmse']:.4f} | "
+              f"MAE: {val_metrics['mae']:.4f} | "
+              f"R²: {val_metrics['r2']:.4f}")
         
         # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_metrics['rmse'] < best_val_rmse:
+            best_val_rmse = val_metrics['rmse']
             model_path = os.path.join(args.results_dir, 'best_model.pth')
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': val_loss,
+                'metrics': val_metrics,
                 'args': vars(args)
             }, model_path)
-            print(f"Saved new best model with val loss: {val_loss:.4f}")
+            print(f"  Saved new best model with validation RMSE: {best_val_rmse:.4f}")
     
-    # Save training history
+    # Save final model and history
+    final_model_path = os.path.join(args.results_dir, 'final_model.pth')
+    torch.save(model.state_dict(), final_model_path)
+    
     history_path = os.path.join(args.results_dir, 'training_history.pt')
     torch.save(history, history_path)
-    print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
-    print(f"Model saved to: {os.path.join(args.results_dir, 'best_model.pth')}")
-    print(f"Training history saved to: {history_path}")
+    
+    print("\n=== Training Complete ===")
+    print(f"Best Validation RMSE: {best_val_rmse:.4f}")
+    print(f"Models saved to: {args.results_dir}")
 
 if __name__ == "__main__":
     main()
