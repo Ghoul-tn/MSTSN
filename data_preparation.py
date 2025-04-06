@@ -148,21 +148,16 @@ class GambiaDroughtDataset(Dataset):
         self.valid_indices.sort(key=lambda x: x[1])
         print(f"Created {len(self)} total samples ({num_pixels} pixels × {max_time} time steps)")
 
-    def __len__(self):
-        return len(self.valid_indices)
+
 
     def __getitem__(self, idx):
-        pixel_idx, time_idx = self.valid_indices[idx]
-        y, x = self.valid_pixels[0][pixel_idx], self.valid_pixels[1][pixel_idx]
-        
-        # Get sequence and target (add 1x1 spatial dim)
-        x_seq = self.features[time_idx:time_idx+self.seq_len, y, x, :]  # (seq_len, 3)
-        y_target = self.targets[time_idx+self.seq_len, y, x]
-        
-        return (
-            torch.FloatTensor(x_seq).unsqueeze(1).unsqueeze(1),  # (seq_len, 1, 1, 3)
-            torch.FloatTensor([y_target]).squeeze()               # scalar
-        )
+        time_idx = idx  # Each sample is a full timestep
+        x_seq = self.features[time_idx:time_idx+self.seq_len]  # (seq_len, H, W, 3)
+        y_target = self.targets[time_idx+self.seq_len]         # (H, W)
+        return x_seq, y_target
+
+    def __len__(self):
+        return self.features.shape[0] - self.seq_len
 
 if __name__ == "__main__":
     # Test data processing
