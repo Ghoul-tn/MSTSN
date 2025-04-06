@@ -77,17 +77,25 @@ def evaluate(model, dataloader, device):
     all_targets = []
     
     with torch.no_grad():
-        for x, y in dataloader:
+        for x, y, valid_mask in dataloader:  # Unpack all three values
             x, y = x.to(device), y.to(device)
-            preds = model(x)
-            all_preds.append(preds)
-            all_targets.append(y)
+            
+            # Flatten spatial dimensions
+            batch_size = x.size(0)
+            y = y.view(batch_size, -1)
+            valid_mask = valid_mask.view(batch_size, -1)
+            
+            # Forward pass
+            pred = model(x)
+            
+            # Store only valid predictions
+            all_preds.append(pred[valid_mask].cpu().numpy())
+            all_targets.append(y[valid_mask].cpu().numpy())
     
-    # Ensure consistent shapes
-    y_true = torch.cat(all_targets).flatten()  # Flatten to [batch_size]
-    y_pred = torch.cat(all_preds).flatten()
-    
-    return compute_metrics(y_true.cpu().numpy(), y_pred.cpu().numpy())
+    # Calculate metrics
+    y_true = np.concatenate(all_targets)
+    y_pred = np.concatenate(all_preds)
+    return compute_metrics(y_true, y_pred)
 class DroughtLoss(nn.Module):
     def __init__(self, base_loss=nn.MSELoss(), alpha=2.0):
         super().__init__()
@@ -181,7 +189,6 @@ def main():
     
     print("\n=== Starting Training ===")
     for epoch in range(args.epochs):
-        # Training phase
         model.train()
         train_loss = 0.0
         train_preds = []
@@ -191,19 +198,28 @@ def main():
             for batch in tepoch:
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
                 
-                x, y = batch  # Direct unpacking
-                x, y = x.to(device), y.to(device)  
-                y = y.flatten()
+                # Unpack all three values from collate_fn
+                x, y, valid_mask = batch  
+                x, y = x.to(device), y.to(device)
+                
+                # Flatten spatial dimensions and apply mask
+                batch_size = x.size(0)
+                y = y.view(batch_size, -1)  # (batch, height*width)
+                valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+                
                 optimizer.zero_grad()
                 
+                # Forward pass
                 pred = model(x)
-                loss = loss_fn(pred, y)
+                
+                # Calculate masked loss
+                loss = loss_fn(pred[valid_mask], y[valid_mask])
                 loss.backward()
                 optimizer.step()
                 
-                train_loss += loss.item()
-                train_preds.append(pred.detach().cpu().numpy())
-                train_targets.append(y.detach().cpu().numpy())
+                # Store predictions and targets for metrics
+                train_preds.append(pred[valid_mask].detach().cpu().numpy())
+                train_targets.append(y[valid_mask].detach().cpu().numpy())
                 tepoch.set_postfix(loss=loss.item())
         
         # Calculate training metrics
