@@ -5,60 +5,54 @@ from Models.SAM.GCN import GCN
 from Models.TEM.GRU import GRU
 
 class MSTSN_Gambia(nn.Module):
-    def __init__(self, adj_matrix, gcn_dim1=64, gcn_dim2=32, gru_dim=64, gru_layers=2):
+    def __init__(self, adj_matrix, gcn_dim1=128, gcn_dim2=64, gru_dim=128, gru_layers=3):
         super().__init__()
         
-        # Register adjacency matrix as buffer so it moves with model
-        adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
-                                    else adj_matrix)
-        self.register_buffer('adj', adj_tensor)
-        
-        # Spatial Module
-        self.gcn = GCN(
-            input_dim=3,  # NDVI, Soil, LST
-            hidden_dim=gcn_dim1,
-            output_dim=gcn_dim2
+        # Enhanced GCN with residual connections
+        self.gcn = nn.Sequential(
+            GCNBlock(3, gcn_dim1, adj_matrix),
+            nn.Dropout(0.3),
+            GCNBlock(gcn_dim1, gcn_dim2, adj_matrix)
         )
         
-        # Temporal Module
-        self.gru = GRU(
+        # Deeper GRU with layer normalization
+        self.gru = nn.GRU(
             input_size=gcn_dim2,
             hidden_size=gru_dim,
-            num_layers=gru_layers
+            num_layers=gru_layers,
+            batch_first=True,
+            dropout=0.2 if gru_layers > 1 else 0
         )
+        self.gru_norm = nn.LayerNorm(gru_dim)
         
-        # Attention
+        # Multi-scale attention
         self.attention = nn.MultiheadAttention(
             embed_dim=gru_dim,
-            num_heads=4,
+            num_heads=8,
+            dropout=0.1,
             batch_first=True
         )
         
-        # Regression Head
+        # Enhanced regression head
         self.regressor = nn.Sequential(
-            nn.Linear(gru_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
+            nn.Linear(gru_dim, 64),
+            nn.SiLU(),
+            nn.LayerNorm(64),
+            nn.Dropout(0.2),
+            nn.Linear(64, 1)
         )
 
     def forward(self, x):
-        batch_size = x.size(0)
-        
-        # Get matching submatrix of adj for current batch
-        adj_batch = self.adj[:batch_size, :batch_size]
-        
-        # Ensure adj is on same device as input
-        adj_batch = adj_batch.to(x.device)
-        
         # Spatial processing
-        gcn_out = self.gcn(x, adj_batch)  # (batch_size, seq_len, gcn_dim2)
+        gcn_out = self.gcn(x)  # [batch, seq_len, gcn_dim2]
         
         # Temporal processing
-        gru_out, _ = self.gru(gcn_out)  # (batch_size, seq_len, gru_dim)
+        gru_out, _ = self.gru(gcn_out)
+        gru_out = self.gru_norm(gru_out)
         
-        # Attention
+        # Attention with skip connection
         attn_out, _ = self.attention(gru_out, gru_out, gru_out)
+        combined = gru_out + 0.5*attn_out  # Residual
         
         # Regression
-        output = self.regressor(attn_out[:, -1, :])  # (batch_size, 1)
-        return output.squeeze(1)  # (batch_size,)
+        return self.regressor(combined[:, -1, :]).squeeze()
