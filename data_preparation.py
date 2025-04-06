@@ -36,7 +36,7 @@ class GambiaDataProcessor:
         print("\nCreating valid pixel mask...")
         valid_mask = ~np.isnan(soil).all(axis=0)
         self.valid_pixels = np.where(valid_mask)
-        self.num_nodes = valid_pixels[0].shape[0]
+        self.num_nodes = len(self.valid_pixels[0])  
         num_nodes = len(self.valid_pixels[0])
         print(f"Using {num_nodes} valid pixels (based on Soil Moisture availability)")
         
