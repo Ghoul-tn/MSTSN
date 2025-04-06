@@ -24,7 +24,7 @@ class GambiaDataProcessor:
         # Create adjacency matrix (5km threshold)
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
-        adj = (distances <= 5).astype(float)
+        adj = (distances <= 10).astype(float)
         np.fill_diagonal(adj, 0)
         self.adj_matrix = scipy.sparse.csr_matrix(adj)  # Sparse format
         
