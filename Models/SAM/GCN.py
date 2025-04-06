@@ -14,7 +14,7 @@ def cal_adj_norm(adj):
     adj_norm = np.dot(np.dot(d_sqrt, adj_), d_sqrt)
     return adj_norm
 
-cclass GraphConvolution(nn.Module):
+class GraphConvolution(nn.Module):
     def __init__(self, input_dim, output_dim, activation='relu'):
         super().__init__()
         self.weight = nn.Parameter(torch.randn(input_dim, output_dim))
