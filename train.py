@@ -115,14 +115,12 @@ def main():
         seq_len=args.seq_len
     )
     
-    # Split dataset using random indices instead of random_split
-    indices = list(range(len(dataset)))
-    np.random.shuffle(indices)
-    split = int(0.8 * len(indices))
-    
-    train_set = torch.utils.data.Subset(dataset, indices[:split])
-    val_set = torch.utils.data.Subset(dataset, indices[split:])
-    
+
+    # Create sequential splits instead of random splits
+    split_idx = int(0.8 * len(dataset))
+    train_set = Subset(dataset, range(0, split_idx))
+    val_set = Subset(dataset, range(split_idx, len(dataset)))
+        
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
