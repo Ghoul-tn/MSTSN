@@ -194,33 +194,32 @@ def main():
         train_preds = []
         train_targets = []
         
-        with tqdm(train_loader, unit="batch") as tepoch:
-            for batch in tepoch:
-                tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
+        for x, y in train_loader:
                 
-                # Unpack all three values from collate_fn
-                x, y, valid_mask = batch  
-                x, y = x.to(device), y.to(device)
+            x = x.to(device)  # [batch, seq_len, 2139, 3]
+            y = y.to(device)  # [batch, 2139]
+            # Flatten spatial dimensions and apply mask
+            batch_size = x.size(0)
+            y = y.view(batch_size, -1)  # (batch, height*width)
+            valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
                 
-                # Flatten spatial dimensions and apply mask
-                batch_size = x.size(0)
-                y = y.view(batch_size, -1)  # (batch, height*width)
-                valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+            optimizer.zero_grad()
                 
-                optimizer.zero_grad()
+            # Forward pass
+            pred = model(x)
                 
-                # Forward pass
-                pred = model(x)
+            # Calculate masked loss
+            loss = loss_fn(pred[valid_mask], y[valid_mask])
+            loss.backward()
+            optimizer.step()
                 
-                # Calculate masked loss
-                loss = loss_fn(pred[valid_mask], y[valid_mask])
-                loss.backward()
-                optimizer.step()
+            # Store predictions and targets for metrics
+            train_preds.append(pred[valid_mask].detach().cpu().numpy())
+            train_targets.append(y[valid_mask].detach().cpu().numpy())
+            tepoch.set_postfix(loss=loss.item())            
+
                 
-                # Store predictions and targets for metrics
-                train_preds.append(pred[valid_mask].detach().cpu().numpy())
-                train_targets.append(y[valid_mask].detach().cpu().numpy())
-                tepoch.set_postfix(loss=loss.item())
+
         
         # Calculate training metrics
         train_metrics = compute_metrics(
