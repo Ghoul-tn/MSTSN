@@ -35,7 +35,7 @@ class GambiaDataProcessor:
         # Create strict valid pixel mask
         print("\nCreating valid pixel mask...")
         valid_mask = (
-            ~np.isnan(ndvi).all(axis=0) & 
+            (~np.isnan(ndvi).all(axis=0) & 
             (~np.isnan(soil).all(axis=0) & 
             (~np.isnan(spi).all(axis=0) & 
             (~np.isnan(lst).all(axis=0)
