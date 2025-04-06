@@ -12,7 +12,6 @@ class GambiaDataProcessor:
         self.data = np.load(data_path)
         self.valid_pixels = None
         self.adj_matrix = None
-        self.num_nodes = valid_pixels[0].shape[0]
         self.scalers = {
             'ndvi': MinMaxScaler(feature_range=(0, 1)),
             'soil': StandardScaler(),
@@ -37,9 +36,10 @@ class GambiaDataProcessor:
         print("\nCreating valid pixel mask...")
         valid_mask = ~np.isnan(soil).all(axis=0)
         self.valid_pixels = np.where(valid_mask)
+        self.num_nodes = valid_pixels[0].shape[0]
         num_nodes = len(self.valid_pixels[0])
         print(f"Using {num_nodes} valid pixels (based on Soil Moisture availability)")
-
+        
         # Initialize arrays for valid data
         features = np.zeros((287, num_nodes, 3))  # (time, nodes, features)
         targets = np.zeros((287, num_nodes))      # (time, nodes)
@@ -129,7 +129,7 @@ class GambiaDroughtDataset(Dataset):
         self.valid_pixels = valid_pixels
         self.seq_len = seq_len
         self.pixel_coords = list(zip(*valid_pixels))
-        
+        self.num_nodes = len(valid_pixels[0])
         # Precompute valid samples
         self.samples = []
         print(f"\nGenerating {seq_len}-month sequences...")
