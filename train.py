@@ -47,19 +47,24 @@ def parse_args():
     return parser.parse_args()
 
 def collate_fn(batch):
-    """Handle custom batch preparation"""
-    features = torch.stack([item[0] for item in batch])  # (batch, seq_len, 1, 1, 3)
-    targets = torch.stack([item[1] for item in batch])   # (batch,)
-    return features, targets
-def compute_metrics(y_true, y_pred):
-    """Calculate all regression metrics"""
+    """Process full spatial snapshots"""
+    features = torch.stack([torch.FloatTensor(item[0]) for item in batch])  # (batch, seq_len, H, W, 3)
+    targets = torch.stack([torch.FloatTensor(item[1]) for item in batch])   # (batch, H, W)
+    
+    # Mask invalid pixels
+    valid_mask = ~torch.isnan(targets)
+    return features, targets, valid_mask
+
+def compute_metrics(y_true, y_pred, valid_mask):
+    """Mask invalid pixels"""
+    y_true = y_true[valid_mask].cpu().numpy()
+    y_pred = y_pred[valid_mask].cpu().numpy()
     return {
         'mse': mean_squared_error(y_true, y_pred),
         'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
         'mae': mean_absolute_error(y_true, y_pred),
         'r2': r2_score(y_true, y_pred)
     }
-
 def evaluate(model, dataloader, device):
     model.eval()
     all_preds = []
