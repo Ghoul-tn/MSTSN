@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tqdm import tqdm
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
-from models.MSTSN import MSTSN_Gambia
+from Models.MSTSN import MSTSN_Gambia
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train MSTSN for Drought Prediction')
