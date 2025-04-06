@@ -101,17 +101,17 @@ def main():
     dataset = GambiaDroughtDataset(
         features=features,
         targets=targets,
-        valid_pixels=processor.valid_pixels,  # Now properly initialized
+        valid_pixels=processor.valid_pixels,
         seq_len=args.seq_len
     )
     
-    # Split data
-    train_size = int(0.8 * len(dataset))
-    train_set, val_set = random_split(
-        dataset, 
-        [train_size, len(dataset) - train_size],
-        generator=torch.Generator().manual_seed(42)
-    )
+    # Split dataset using random indices instead of random_split
+    indices = list(range(len(dataset)))
+    np.random.shuffle(indices)
+    split = int(0.8 * len(indices))
+    
+    train_set = torch.utils.data.Subset(dataset, indices[:split])
+    val_set = torch.utils.data.Subset(dataset, indices[split:])
     
     train_loader = DataLoader(
         train_set,
