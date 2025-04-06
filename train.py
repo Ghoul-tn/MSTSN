@@ -47,11 +47,19 @@ def parse_args():
     return parser.parse_args()
 
 def collate_fn(batch):
-    """Process batches of valid nodes only"""
-    # Stack features and targets
+    """Process batches of valid nodes only
+    Returns:
+        features: [batch, seq_len, 2139, 3]
+        targets: [batch, 2139]
+        valid_mask: [batch, 2139] (all True since we're using only valid pixels)
+    """
     features = torch.stack([item[0] for item in batch])  # [batch, seq_len, 2139, 3]
     targets = torch.stack([item[1] for item in batch])   # [batch, 2139]
-    return features, targets
+    
+    # Since we're only using valid pixels, all positions are valid
+    valid_mask = torch.ones_like(targets, dtype=torch.bool)
+    
+    return features, targets, valid_mask
 
 def compute_metrics(y_true, y_pred, valid_mask):
     """Mask invalid pixels"""
