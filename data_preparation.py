@@ -103,7 +103,7 @@ class GambiaDataProcessor:
         print("\nBuilding adjacency matrix (5km neighborhood)...")
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
-        self.adj_matrix = (distances <= 5).astype(float)
+        self.adj_matrix = (distances <= 10).astype(float)
         np.fill_diagonal(self.adj_matrix, 0)
         self.adj_matrix = scipy.sparse.csr_matrix(self.adj_matrix)
 
