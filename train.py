@@ -46,6 +46,16 @@ def parse_args():
     
     return parser.parse_args()
 
+def collate_fn(batch):
+    features = [item[0] for item in batch]  # List of (seq_len, 1, 1, 3)
+    targets = [item[1] for item in batch]
+    
+    # Stack with added batch dimension
+    return (
+        torch.stack(features, dim=0),  # (batch_size, seq_len, 1, 1, 3)
+        torch.stack(targets, dim=0)
+    )
+
 def compute_metrics(y_true, y_pred):
     """Calculate all regression metrics"""
     return {
@@ -116,15 +126,19 @@ def main():
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=2
+        shuffle=False,  # Critical for time series
+        num_workers=2,
+        collate_fn=collate_fn
     )
+    
+    # For validation - also no shuffling
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch_size,
-        num_workers=2
+        shuffle=False,
+        num_workers=2,
+        collate_fn=collate_fn
     )
-
     # Initialize model
     model = MSTSN_Gambia(
         adj_matrix=processor.adj_matrix,
