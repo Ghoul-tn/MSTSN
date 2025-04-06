@@ -12,17 +12,18 @@ class GambiaDataProcessor:
         self.data = np.load(data_path)
         self.valid_pixels = None
         self.adj_matrix = None
+        self.valid_indices = []
+        for pixel_idx in range(len(valid_pixels[0])):
+            for time_idx in range(features.shape[0] - seq_len):
+                self.valid_indices.append((pixel_idx, time_idx))
+        self.valid_indices.sort(key=lambda x: x[1])
         self.scalers = {
             'ndvi': MinMaxScaler(feature_range=(0, 1)),
             'soil': StandardScaler(),
             'lst': StandardScaler(),
             'spi': QuantileTransformer(output_distribution='normal', n_quantiles=1000)
         }
-       self.valid_indices = []
-        for pixel_idx in range(len(valid_pixels[0])):
-            for time_idx in range(features.shape[0] - seq_len):
-                self.valid_indices.append((pixel_idx, time_idx))
-        self.valid_indices.sort(key=lambda x: x[1])
+
     def process_data(self):
         """Step 1: Data Preparation with expert normalization"""
         print("\n=== Loading and Processing Raw Data ===")
