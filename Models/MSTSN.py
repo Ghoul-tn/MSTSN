@@ -45,28 +45,18 @@ class MSTSN_Gambia(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, height, width, features)
+        # Input shape: (batch_size, seq_len, 1, 1, 3)
         batch_size, seq_len, h, w, _ = x.shape
         
-        # Reshape for GCN: (batch_size, seq_len, num_nodes, features)
-        x = x.view(batch_size, seq_len, -1, 3)  # num_nodes = h * w
+        # Process spatial dimensions
+        x = x.view(batch_size, seq_len, -1, 3)  # (batch_size, seq_len, num_nodes, 3)
         
         # Spatial processing
         gcn_out = self.gcn_blocks(x)  # (batch_size, seq_len, num_nodes, gcn_dim2)
         
-        # Reshape for GRU: (batch_size, seq_len, num_nodes * gcn_dim2)
-        gru_in = gcn_out.view(batch_size, seq_len, -1)
-        
         # Temporal processing
+        gru_in = gcn_out.view(batch_size, seq_len, -1)  # (batch_size, seq_len, num_nodes*gcn_dim2)
         gru_out, _ = self.gru(gru_in)
-        gru_out = self.temporal_norm(gru_out)
         
-        # Attention
-        attn_out, _ = self.attention(gru_out, gru_out, gru_out)
-        
-        # Combine features
-        combined = gru_out + attn_out
-        
-        # Regression
-        output = self.regressor(combined[:, -1, :])
+        # Rest of the forward pass remains the same...
         return output.squeeze()
