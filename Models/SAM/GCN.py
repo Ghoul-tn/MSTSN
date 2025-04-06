@@ -14,72 +14,44 @@ def cal_adj_norm(adj):
     adj_norm = np.dot(np.dot(d_sqrt, adj_), d_sqrt)
     return adj_norm
 
-class GCNBlock(nn.Module):
-    def __init__(self, input_dim, output_dim, adj_matrix):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
-        self.norm = nn.LayerNorm(output_dim)
-        self.activation = nn.GELU()
-        
-        # Convert and register adjacency matrix
-        adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
-                                      else adj_matrix)
-        self.register_buffer('adj', adj_tensor)
-
-    def forward(self, x):
-        """x shape: (batch_size, seq_len, num_nodes, input_dim)"""
-        batch_size, seq_len, num_nodes, _ = x.shape
-        
-        # Process each timestep
-        outputs = []
-        for t in range(seq_len):
-            x_t = x[:, t, :, :]  # (batch_size, num_nodes, input_dim)
-            
-            # Linear transformation
-            x_t = self.linear(x_t)  # (batch_size, num_nodes, output_dim)
-            
-            # Graph propagation (batch matrix multiplication)
-            adj_batch = self.adj.unsqueeze(0).expand(batch_size, -1, -1)  # (batch_size, num_nodes, num_nodes)
-            x_t = torch.bmm(adj_batch, x_t)  # (batch_size, num_nodes, output_dim)
-            
-            # Normalization and activation
-            x_t = self.norm(x_t)
-            x_t = self.activation(x_t)
-            outputs.append(x_t.unsqueeze(1))  # (batch_size, 1, num_nodes, output_dim)
-        
-        return torch.cat(outputs, dim=1)  # (batch_size, seq_len, num_nodes, output_dim)
-
-class GraphConvolution(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super().__init__()
-        self.weight = nn.Parameter(torch.randn(input_dim, output_dim))
-        self.bias = nn.Parameter(torch.zeros(output_dim))
-        self.activation = nn.ReLU()
-
-    def forward(self, x, adj):
-        # Ensure all tensors are on same device
-        adj = adj.to(x.device)
-        self.weight = self.weight.to(x.device)
-        self.bias = self.bias.to(x.device)
-        
-        support = torch.mm(x, self.weight)  # (batch_size, output_dim)
-        output = torch.mm(adj, support) + self.bias
-        return self.activation(output)
-
 class GCN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
         super().__init__()
         self.layer1 = GraphConvolution(input_dim, hidden_dim)
         self.layer2 = GraphConvolution(hidden_dim, output_dim)
-
-    def forward(self, x, adj):
-        seq_len = x.size(1)
-        outputs = []
         
-        for t in range(seq_len):
-            x_t = x[:, t, :]  # (batch_size, input_dim)
-            x_t = self.layer1(x_t, adj)
-            x_t = self.layer2(x_t, adj)
-            outputs.append(x_t.unsqueeze(1))
+    def forward(self, x, adj):
+        """Process batched graph data
+        Args:
+            x: (batch_size, num_nodes, input_dim)
+            adj: (num_nodes, num_nodes)
+        Returns:
+            (batch_size, num_nodes, output_dim)
+        """
+        # Process each sample in batch
+        batch_size = x.size(0)
+        outputs = []
+        adj = adj.to(x.device)
+        
+        for i in range(batch_size):
+            x_i = x[i]  # (num_nodes, input_dim)
+            x_i = self.layer1(x_i, adj)
+            x_i = self.layer2(x_i, adj)
+            outputs.append(x_i.unsqueeze(0))
             
-        return torch.cat(outputs, dim=1)  # (batch_size, seq_len, output_dim)
+        return torch.cat(outputs, dim=0)
+
+class GraphConvolution(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+        self.activation = nn.ReLU()
+        
+    def forward(self, x, adj):
+        # Linear transformation
+        x = self.linear(x)  # (num_nodes, output_dim)
+        
+        # Graph propagation
+        x = torch.mm(adj, x)  # (num_nodes, output_dim)
+        
+        return self.activation(x)
