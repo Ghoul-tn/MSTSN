@@ -45,17 +45,17 @@ class MSTSN_Gambia(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, height, width, features)
+        """x shape: (batch_size, seq_len, 1, 1, 3)"""
         batch_size, seq_len, h, w, _ = x.shape
         
-        # Reshape for GCN: (batch_size, seq_len, num_nodes, features)
-        x = x.view(batch_size, seq_len, -1, 3)  # num_nodes = h * w
+        # Reshape to node features
+        x = x.view(batch_size, seq_len, -1, 3)  # (batch_size, seq_len, num_nodes, 3)
         
         # Spatial processing
         gcn_out = self.gcn_blocks(x)  # (batch_size, seq_len, num_nodes, gcn_dim2)
         
-        # Reshape for GRU: (batch_size, seq_len, num_nodes * gcn_dim2)
-        gru_in = gcn_out.view(batch_size, seq_len, -1)
+        # Flatten for temporal processing
+        gru_in = gcn_out.reshape(batch_size, seq_len, -1)  # (batch_size, seq_len, num_nodes*gcn_dim2)
         
         # Temporal processing
         gru_out, _ = self.gru(gru_in)
