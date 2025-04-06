@@ -190,9 +190,9 @@ def main():
             x = x.to(device)  # [batch, seq_len, 2139, 3]
             y = y.to(device)  # [batch, 2139]
             # Flatten spatial dimensions and apply mask
-            # batch_size = x.size(0)
-            # y = y.view(batch_size, -1)  # (batch, height*width)
-            # valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+            batch_size = x.size(0)
+            y = y.view(batch_size, -1)  # (batch, height*width)
+            valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
                 
             optimizer.zero_grad()
                 
