@@ -189,8 +189,12 @@ def main():
                 # Calculate masked loss
                 loss = loss_fn(pred, y)
                 loss.backward()
+                if torch.isnan(loss).any():
+                    print("NaN loss detected!")
+                    break
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
-                    
+                train_loss += loss.item() * x.size(0)  # Multiply by batch size
                 # Store predictions and targets for metrics
                 train_preds.append(pred.detach().cpu().numpy())
                 train_targets.append(y.detach().cpu().numpy())
@@ -198,19 +202,19 @@ def main():
 
                 
 
-        
+        print(f"Current LR: {optimizer.param_groups[0]['lr']:.2e}")
         # Calculate training metrics
         train_metrics = compute_metrics(
             np.concatenate(train_targets),
             np.concatenate(train_preds)
         )
-        train_metrics['loss'] = train_loss / len(train_loader)
+        train_metrics['loss'] = train_loss / len(train_loader.dataset) 
         history['train'].append(train_metrics)
         
         # Validation phase
         val_metrics = evaluate(model, val_loader, device)
         history['val'].append(val_metrics)
-        scheduler.step(val_metrics['rmse'])
+        scheduler.step()
         
         # Print epoch summary
         print(f"\nEpoch {epoch+1} Summary:")
