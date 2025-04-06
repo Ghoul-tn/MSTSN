@@ -76,6 +76,8 @@ class MSTSN_Gambia(nn.Module):
             attn_in.reshape(-1, num_nodes, self.gru_dim)
         )
         
-        # Final prediction
-        output = self.regressor(attn_out[:, -1, :])  # Use last timestep
+        # Final prediction - take last timestep
+        output = self.regressor(attn_out[:, -1, :])  # [batch*nodes, 1]
+        
+        # Reshape to match expected output
         return output.reshape(batch_size, num_nodes)  # [batch, nodes]
