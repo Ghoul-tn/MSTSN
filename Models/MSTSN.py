@@ -42,7 +42,8 @@ class MSTSN_Gambia(nn.Module):
         self.regressor = nn.Sequential(
             nn.Linear(gru_dim, 64),
             nn.GELU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.5),  # Increased from 0.2
+            nn.LayerNorm(64),
             nn.Linear(64, 1)
         )
 
