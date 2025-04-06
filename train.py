@@ -55,7 +55,6 @@ def compute_metrics(y_true, y_pred):
     }
 
 def evaluate(model, dataloader, device):
-    """Evaluate model on a dataloader and return metrics"""
     model.eval()
     all_preds = []
     all_targets = []
@@ -64,13 +63,14 @@ def evaluate(model, dataloader, device):
         for x, y in dataloader:
             x, y = x.to(device), y.to(device)
             preds = model(x)
-            all_preds.append(preds.cpu().numpy())
-            all_targets.append(y.cpu().numpy())
+            all_preds.append(preds)
+            all_targets.append(y)
     
-    y_true = np.concatenate(all_targets)
-    y_pred = np.concatenate(all_preds)
+    # Ensure consistent shapes
+    y_true = torch.cat(all_targets).flatten()  # Flatten to [batch_size]
+    y_pred = torch.cat(all_preds).flatten()
     
-    return compute_metrics(y_true, y_pred)
+    return compute_metrics(y_true.cpu().numpy(), y_pred.cpu().numpy())
 
 def main():
     args = parse_args()
@@ -154,6 +154,7 @@ def main():
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
                 
                 x, y = x.to(device), y.to(device)
+                y = y.flatten()
                 optimizer.zero_grad()
                 
                 pred = model(x)
