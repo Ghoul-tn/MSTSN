@@ -2,6 +2,7 @@ import argparse
 import os
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tqdm import tqdm
