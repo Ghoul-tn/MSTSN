@@ -141,13 +141,11 @@ class GambiaDroughtDataset(Dataset):
         return len(self.samples)
     
     def __getitem__(self, idx):
-        pixel_idx, t = self.samples[idx]
+        pixel_idx, time_idx = self.valid_indices[idx]
         y, x = self.pixel_coords[pixel_idx]
         
-        x_seq = self.features[t:t+self.seq_len, y, x, :]  # (seq_len, 3)
-        y_target = self.targets[t+self.seq_len, y, x]     # scalar
+        # Return tensors directly
+        x_seq = torch.FloatTensor(self.features[time_idx:time_idx+self.seq_len, y, x, :])
+        y_target = torch.FloatTensor([self.targets[time_idx+self.seq_len, y, x]]).squeeze()
         
-        return {
-            'features': torch.FloatTensor(x_seq),  # (seq_len, 3)
-            'target': torch.FloatTensor([y_target]).squeeze()
-        }
+        return x_seq, y_target  # Simple tuple instead of dict
