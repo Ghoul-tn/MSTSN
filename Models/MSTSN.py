@@ -9,9 +9,9 @@ class MSTSN_Gambia(nn.Module):
         
         # Store adjacency matrix and calculate num_nodes
         adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
-                                      else adj_matrix)
+                                     else adj_matrix)
         self.register_buffer('adj', adj_tensor)
-        self.num_nodes = adj_tensor.shape[0]  # Define num_nodes here
+        self.num_nodes = adj_tensor.shape[0]  # Should be 2139
         
         # Spatial Module
         self.gcn = GCN(
@@ -43,24 +43,22 @@ class MSTSN_Gambia(nn.Module):
         )
 
     def forward(self, x):
-        """x shape: (batch_size, seq_len, height, width, channels)"""
-        batch_size, seq_len, h, w, _ = x.shape
-        
-        # Reshape to node features (batch_size, seq_len, num_nodes, 3)
-        x = x.reshape(batch_size, seq_len, h*w, 3)
+        """x shape: (batch_size, seq_len, num_nodes, features)"""
+        batch_size, seq_len, num_nodes, _ = x.shape
+        assert num_nodes == self.num_nodes, f"Expected {self.num_nodes} nodes, got {num_nodes}"
         
         # Process each timestep
         outputs = []
         for t in range(seq_len):
-            x_t = x[:, t, :, :]  # (batch_size, num_nodes, 3)
-            gcn_out = self.gcn(x_t, self.adj)  # (batch_size, num_nodes, gcn_dim2)
+            x_t = x[:, t, :, :]  # [batch_size, num_nodes, features]
+            gcn_out = self.gcn(x_t, self.adj)  # [batch_size, num_nodes, gcn_dim2]
             outputs.append(gcn_out.unsqueeze(1))
         
-        # Stack temporal outputs (batch_size, seq_len, num_nodes, gcn_dim2)
+        # Stack temporal outputs [batch_size, seq_len, num_nodes, gcn_dim2]
         gcn_out = torch.cat(outputs, dim=1)
         
-        # Temporal processing (flatten nodes for GRU)
-        gru_in = gcn_out.reshape(batch_size, seq_len, -1)  # (batch_size, seq_len, num_nodes*gcn_dim2)
+        # Temporal processing
+        gru_in = gcn_out.reshape(batch_size, seq_len, -1)  # Flatten nodes
         gru_out, _ = self.gru(gru_in)
         
         # Attention
@@ -68,6 +66,6 @@ class MSTSN_Gambia(nn.Module):
         
         # Regression (predict for each node)
         node_features = attn_out[:, -1, :].reshape(batch_size, self.num_nodes, -1)
-        output = self.regressor(node_features)  # (batch_size, num_nodes, 1)
+        output = self.regressor(node_features)
         
-        return output.squeeze(-1)  # (batch_size, num_nodes)
+        return output.squeeze(-1)  # [batch_size, num_nodes]
