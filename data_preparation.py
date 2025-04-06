@@ -12,6 +12,7 @@ class GambiaDataProcessor:
         self.data = np.load(data_path)
         self.valid_pixels = None
         self.adj_matrix = None
+        self.num_nodes = valid_pixels[0].shape[0]
         self.scalers = {
             'ndvi': MinMaxScaler(feature_range=(0, 1)),
             'soil': StandardScaler(),
@@ -146,4 +147,7 @@ class GambiaDroughtDataset(Dataset):
         x_seq = self.features[t:t+self.seq_len, y, x, :]  # (seq_len, 3)
         y_target = self.targets[t+self.seq_len, y, x]     # scalar
         
-        return torch.FloatTensor(x_seq), torch.FloatTensor([y_target]).squeeze()  # Changed here
+        return {
+            'features': torch.FloatTensor(x_seq),  # (seq_len, 3)
+            'target': torch.FloatTensor([y_target]).squeeze()
+        }
