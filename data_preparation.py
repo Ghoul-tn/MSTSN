@@ -122,30 +122,31 @@ class GambiaDataProcessor:
         return feature_grid, target_grid
 
 class GambiaDroughtDataset(Dataset):
-    """Dataset class with optimized sampling"""
     def __init__(self, features, targets, valid_pixels, seq_len=12):
         self.features = features  # (287, 41, 84, 3)
         self.targets = targets    # (287, 41, 84)
         self.valid_pixels = valid_pixels
         self.seq_len = seq_len
-        self.pixel_coords = list(zip(*valid_pixels))
-        self.num_nodes = len(valid_pixels[0])
-        # Precompute valid samples
-        self.samples = []
-        print(f"\nGenerating {seq_len}-month sequences...")
-        for pixel_idx in tqdm(range(len(self.pixel_coords))):
-            for t in range(287 - seq_len):
-                self.samples.append((pixel_idx, t))
         
+        # Generate valid indices (pixel_idx, time_idx) pairs
+        self.valid_indices = []
+        num_pixels = len(valid_pixels[0])
+        max_time = features.shape[0] - seq_len
+        
+        print("\nGenerating valid samples...")
+        for pixel_idx in tqdm(range(num_pixels)):
+            for time_idx in range(max_time):
+                self.valid_indices.append((pixel_idx, time_idx))
+                
     def __len__(self):
-        return len(self.samples)
+        return len(self.valid_indices)
     
     def __getitem__(self, idx):
         pixel_idx, time_idx = self.valid_indices[idx]
-        y, x = self.pixel_coords[pixel_idx]
+        y, x = self.valid_pixels[0][pixel_idx], self.valid_pixels[1][pixel_idx]
         
-        # Return tensors directly
-        x_seq = torch.FloatTensor(self.features[time_idx:time_idx+self.seq_len, y, x, :])
-        y_target = torch.FloatTensor([self.targets[time_idx+self.seq_len, y, x]]).squeeze()
+        # Get sequence and target
+        x_seq = self.features[time_idx:time_idx+self.seq_len, y, x, :]  # (seq_len, 3)
+        y_target = self.targets[time_idx+self.seq_len, y, x]
         
-        return x_seq, y_target  # Simple tuple instead of dict
+        return torch.FloatTensor(x_seq), torch.FloatTensor([y_target]).squeeze()
