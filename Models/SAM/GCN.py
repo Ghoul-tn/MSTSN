@@ -21,13 +21,13 @@ class GCNBlock(nn.Module):
         self.norm = nn.LayerNorm(output_dim)
         self.activation = nn.GELU()
         
-        # Register adjacency matrix as buffer
+        # Convert and register adjacency matrix
         adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
                                       else adj_matrix)
         self.register_buffer('adj', adj_tensor)
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, num_nodes, input_dim)
+        """x shape: (batch_size, seq_len, num_nodes, input_dim)"""
         batch_size, seq_len, num_nodes, _ = x.shape
         
         # Process each timestep
@@ -35,14 +35,14 @@ class GCNBlock(nn.Module):
         for t in range(seq_len):
             x_t = x[:, t, :, :]  # (batch_size, num_nodes, input_dim)
             
-            # Graph convolution
+            # Linear transformation
             x_t = self.linear(x_t)  # (batch_size, num_nodes, output_dim)
-            x_t = torch.bmm(self.adj.expand(batch_size, -1, -1), x_t)  # Graph propagation
             
-            # Residual connection
-            if x.shape[-1] == x_t.shape[-1]:  # Match dimensions
-                x_t = x_t + x[:, t, :, :]
+            # Graph propagation (batch matrix multiplication)
+            adj_batch = self.adj.unsqueeze(0).expand(batch_size, -1, -1)  # (batch_size, num_nodes, num_nodes)
+            x_t = torch.bmm(adj_batch, x_t)  # (batch_size, num_nodes, output_dim)
             
+            # Normalization and activation
             x_t = self.norm(x_t)
             x_t = self.activation(x_t)
             outputs.append(x_t.unsqueeze(1))  # (batch_size, 1, num_nodes, output_dim)
