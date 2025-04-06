@@ -152,7 +152,7 @@ def main():
         num_workers=2,
         collate_fn=collate_fn
     )
-    # Initialize model
+    # Model initialization
     model = MSTSN_Gambia(
         adj_matrix=processor.adj_matrix,
         gcn_dim1=args.gcn_dim1,
