@@ -128,9 +128,9 @@ class GambiaDroughtDataset(Dataset):
         # Validate inputs
         assert len(valid_pixels) == 2, "valid_pixels must be (y_indices, x_indices) tuple"
         assert features.shape[:3] == targets.shape, "Feature/target spatial dimensions mismatch"
-        
-        self.features = features  # (287, 41, 84, 3)
-        self.targets = targets    # (287, 41, 84)
+        y_idx, x_idx = valid_pixels
+        self.features = features[:, y_idx, x_idx, :]  # [time, 2139, 3]
+        self.targets = targets[:, y_idx, x_idx]       # [time, 2139]
         self.valid_pixels = valid_pixels
         self.seq_len = seq_len
         
@@ -151,13 +151,16 @@ class GambiaDroughtDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        time_idx = idx  # Each sample is a full timestep
-        x_seq = self.features[time_idx:time_idx+self.seq_len]  # (seq_len, H, W, 3)
-        y_target = self.targets[time_idx+self.seq_len]         # (H, W)
-        return x_seq, y_target
+        """Returns:
+           x: [seq_len, 2139, 3]
+           y: [2139]
+        """
+        x_seq = self.features[idx:idx+self.seq_len]
+        y_target = self.targets[idx+self.seq_len]
+        return torch.FloatTensor(x_seq), torch.FloatTensor(y_target)
 
     def __len__(self):
-        return self.features.shape[0] - self.seq_len
+        return len(self.features) - self.seq_len
 
 if __name__ == "__main__":
     # Test data processing
