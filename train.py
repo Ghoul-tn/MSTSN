@@ -205,8 +205,8 @@ def main():
             optimizer.step()
                 
             # Store predictions and targets for metrics
-            train_preds.append(pred[valid_mask].detach().cpu().numpy())
-            train_targets.append(y[valid_mask].detach().cpu().numpy())
+            train_preds.append(pred.detach().cpu().numpy())
+            train_targets.append(y.detach().cpu().numpy())
             tepoch.set_postfix(loss=loss.item())            
 
                 
