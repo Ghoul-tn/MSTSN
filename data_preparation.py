@@ -96,7 +96,7 @@ class GambiaDataProcessor:
         print("\nTarget (SPI) Statistics:")
         print(f"- Min: {targets.min():.2f}, Max: {targets.max():.2f}")
         print(f"- Mean: {targets.mean():.2f}, Std: {targets.std():.2f}")
-        print("- Value counts:", np.histogram(targets, bins=10)[0]
+        print("- Value counts:", np.histogram(targets, bins=10)[0])
                 # Create adjacency matrix
         print("\nBuilding adjacency matrix...")
         coords = np.column_stack(self.valid_pixels)
