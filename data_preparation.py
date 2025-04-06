@@ -143,4 +143,4 @@ class GambiaDroughtDataset(Dataset):
         x_seq = self.features[t:t+self.seq_len, y, x, :]  # (seq_len, 3)
         y_target = self.targets[t+self.seq_len, y, x]     # scalar
         
-        return torch.FloatTensor(x_seq), torch.FloatTensor([y_target])
+        return torch.FloatTensor(x_seq), torch.FloatTensor([y_target]).squeeze()  # Changed here
