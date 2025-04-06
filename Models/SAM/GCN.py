@@ -22,15 +22,13 @@ class GraphConvolution(nn.Module):
         self.activation = nn.ReLU()
 
     def forward(self, x, adj):
-        # x shape: (batch_size, input_dim)
-        # adj shape: (batch_size, batch_size) - adjacency matrix for current batch
+        # Ensure all tensors are on same device
+        adj = adj.to(x.device)
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device)
         
-        # Linear transformation
         support = torch.mm(x, self.weight)  # (batch_size, output_dim)
-        
-        # Neighborhood aggregation
-        output = torch.mm(adj, support) + self.bias  # (batch_size, output_dim)
-        
+        output = torch.mm(adj, support) + self.bias
         return self.activation(output)
 
 class GCN(nn.Module):
@@ -40,10 +38,6 @@ class GCN(nn.Module):
         self.layer2 = GraphConvolution(hidden_dim, output_dim)
 
     def forward(self, x, adj):
-        # x shape: (batch_size, seq_len, input_dim)
-        # adj shape: (batch_size, batch_size)
-        
-        # Process each timestep
         seq_len = x.size(1)
         outputs = []
         
@@ -51,6 +45,6 @@ class GCN(nn.Module):
             x_t = x[:, t, :]  # (batch_size, input_dim)
             x_t = self.layer1(x_t, adj)
             x_t = self.layer2(x_t, adj)
-            outputs.append(x_t.unsqueeze(1))  # (batch_size, 1, output_dim)
+            outputs.append(x_t.unsqueeze(1))
             
         return torch.cat(outputs, dim=1)  # (batch_size, seq_len, output_dim)
