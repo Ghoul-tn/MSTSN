@@ -174,7 +174,7 @@ def main():
         train_loss = 0.0
         train_preds = []
         train_targets = []
-        with tqdm(train_loader, unit="batch") as tepoch:
+        with tqdm(train_loader) as tepoch:
             for x, y in train_loader:
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")    
                 x = x.to(device)  # [batch, seq_len, 2139, 3]
