@@ -52,10 +52,8 @@ def collate_fn(batch):
     targets = torch.stack([item[1] for item in batch])   # [batch, 2139]
     return features, targets
 
-def compute_metrics(y_true, y_pred, valid_mask):
-    """Mask invalid pixels"""
-    y_true = y_true[valid_mask].cpu().numpy()
-    y_pred = y_pred[valid_mask].cpu().numpy()
+def compute_metrics(y_true, y_pred):
+    """Calculate all regression metrics"""
     return {
         'mse': mean_squared_error(y_true, y_pred),
         'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
@@ -63,29 +61,21 @@ def compute_metrics(y_true, y_pred, valid_mask):
         'r2': r2_score(y_true, y_pred)
     }
 def evaluate(model, dataloader, device):
+    """Evaluate model on a dataloader and return metrics"""
     model.eval()
     all_preds = []
     all_targets = []
     
     with torch.no_grad():
-        for x, y, valid_mask in dataloader:  # Unpack all three values
+        for x, y in dataloader:
             x, y = x.to(device), y.to(device)
-            
-            # Flatten spatial dimensions
-            # batch_size = x.size(0)
-            # y = y.view(batch_size, -1)
-            # valid_mask = valid_mask.view(batch_size, -1)
-            
-            # Forward pass
-            pred = model(x)
-            
-            # Store only valid predictions
-            all_preds.append(pred[valid_mask].cpu().numpy())
-            all_targets.append(y[valid_mask].cpu().numpy())
+            preds = model(x)
+            all_preds.append(preds.cpu().numpy())
+            all_targets.append(y.cpu().numpy())
     
-    # Calculate metrics
     y_true = np.concatenate(all_targets)
     y_pred = np.concatenate(all_preds)
+    
     return compute_metrics(y_true, y_pred)
 class DroughtLoss(nn.Module):
     def __init__(self, base_loss=nn.MSELoss(), alpha=2.0):
@@ -189,10 +179,7 @@ def main():
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")    
                 x = x.to(device)  # [batch, seq_len, 2139, 3]
                 y = y.to(device)  # [batch, 2139]
-                # # Flatten spatial dimensions and apply mask
-                # batch_size = x.size(0)
-                # y = y.view(batch_size, -1)  # (batch, height*width)
-                # valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+
                     
                 optimizer.zero_grad()
                     
