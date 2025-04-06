@@ -93,8 +93,11 @@ class GambiaDataProcessor:
             targets.reshape(-1, 1)
         ).reshape(287, num_nodes)
         print("- SPI: QuantileTransformer (Gaussian) applied")
-
-        # Create adjacency matrix
+        print("\nTarget (SPI) Statistics:")
+        print(f"- Min: {targets.min():.2f}, Max: {targets.max():.2f}")
+        print(f"- Mean: {targets.mean():.2f}, Std: {targets.std():.2f}")
+        print("- Value counts:", np.histogram(targets, bins=10)[0]
+                # Create adjacency matrix
         print("\nBuilding adjacency matrix...")
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
