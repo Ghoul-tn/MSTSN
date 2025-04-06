@@ -14,52 +14,36 @@ def cal_adj_norm(adj):
     adj_norm = np.dot(np.dot(d_sqrt, adj_), d_sqrt)
     return adj_norm
 
-class Graph_convolution(nn.Module):
-    def __init__(self, input_dim, output_dim, bias=False, activation='relu'):
-        super(Graph_convolution, self).__init__()
-        self.bias = None
-        # 权重矩阵
+cclass GraphConvolution(nn.Module):
+    def __init__(self, input_dim, output_dim, activation='relu'):
+        super().__init__()
         self.weight = nn.Parameter(torch.randn(input_dim, output_dim))
-        if bias:
-            self.bias = nn.Parameter(torch.zeros(output_dim))
-        # 激活函数
-        if activation == 'relu':
-            self.act = nn.ReLU()
-        else:
-            self.act = nn.Sigmoid()
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+        self.activation = nn.ReLU() if activation == 'relu' else nn.Sigmoid()
 
     def forward(self, x, adj):
-        x = x.reshape(69, -1)
-        x = torch.tensor(x, dtype=torch.float)
-        adj = torch.tensor(adj, dtype=torch.float)
-        out = torch.mm(adj, x)
-        out = torch.tensor(out, dtype=torch.float)
-        out = torch.mm(out, self.weight)
-        if self.bias:
-            out += self.bias
-        return self.act(out)
-
+        # x shape: (num_nodes, input_dim)
+        # adj shape: (num_nodes, num_nodes)
+        support = torch.mm(x, self.weight)  # (num_nodes, output_dim)
+        output = torch.spmm(adj, support) + self.bias  # Sparse matrix multiplication
+        return self.activation(output)
 
 class GCN(nn.Module):
-    def __init__(self, input_dim, output_dim1, output_dim2, adj):
-        super(GCN, self).__init__()
-        self.input_dim = input_dim
-        self.output_dim1 = output_dim1
-        self.output_dim2 = output_dim2
+    def __init__(self, input_dim, hidden_dim, output_dim, adj):
+        super().__init__()
+        self.layer1 = GraphConvolution(input_dim, hidden_dim)
+        self.layer2 = GraphConvolution(hidden_dim, output_dim, activation='sigmoid')
         self.adj = adj
-        self.layer1 = Graph_convolution(self.input_dim, self.output_dim1)
-        self.layer2 = Graph_convolution(self.output_dim1, self.output_dim2, activation='sigmoid')
 
     def forward(self, x):
-        self.adj = cal_adj_norm(self.adj)
-        B = []
-        for i in range(x.shape[1]):
-            A = []
-            for j in range(x.shape[2]):
-                out = self.layer1(x[:, i, j, :], self.adj)
-                out = self.layer2(out, self.adj)
-                A.append(out)
-            A = torch.stack(A)
-            B.append(A)
-        B = torch.stack(B)
-        return B
+        # x shape: (seq_len, batch_size, input_dim)
+        seq_len, batch_size, _ = x.shape
+        outputs = []
+        
+        for t in range(seq_len):
+            x_t = x[t]  # (batch_size, input_dim)
+            x_t = self.layer1(x_t, self.adj)
+            x_t = self.layer2(x_t, self.adj)
+            outputs.append(x_t)
+            
+        return torch.stack(outputs)  # (seq_len, batch_size, output_dim)
