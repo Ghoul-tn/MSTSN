@@ -8,14 +8,14 @@ class MSTSN_Gambia(nn.Module):
         super().__init__()
         
         # Store architecture parameters
-        self.gcn_dim2 = gcn_dim2  # Store as attribute
+        self.gcn_dim2 = gcn_dim2
         self.gru_dim = gru_dim
+        self.num_nodes = adj_matrix.shape[0]  # Should be 2139
         
         # Convert and store adjacency matrix
         adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
                                      else adj_matrix)
         self.register_buffer('adj', adj_tensor)
-        self.num_nodes = adj_tensor.shape[0]
         
         # Spatial Module
         self.gcn = GCN(
@@ -62,7 +62,7 @@ class MSTSN_Gambia(nn.Module):
         
         # Prepare for GRU: reshape to process each node's time series
         gru_in = gcn_out.permute(0, 2, 1, 3)  # [batch, nodes, seq_len, gcn_dim2]
-        gru_in = gru_in.reshape(-1, seq_len, self.gcn_dim2)  # [batch*nodes, seq_len, gcn_dim2]
+        gru_in = gru_in.reshape(batch_size * num_nodes, seq_len, -1)
         
         # Temporal processing
         gru_out, _ = self.gru(gru_in)  # [batch*nodes, seq_len, gru_dim]
@@ -71,13 +71,14 @@ class MSTSN_Gambia(nn.Module):
         # Attention across time steps
         attn_in = gru_out.permute(0, 2, 1, 3)  # [batch, seq_len, nodes, gru_dim]
         attn_out, _ = self.attention(
-            attn_in.reshape(-1, num_nodes, self.gru_dim),
-            attn_in.reshape(-1, num_nodes, self.gru_dim),
-            attn_in.reshape(-1, num_nodes, self.gru_dim)
+            attn_in.reshape(batch_size * seq_len, num_nodes, -1),
+            attn_in.reshape(batch_size * seq_len, num_nodes, -1),
+            attn_in.reshape(batch_size * seq_len, num_nodes, -1)
         )
         
-        # Final prediction - take last timestep
-        output = self.regressor(attn_out[:, -1, :])  # [batch*nodes, 1]
+        # Final prediction
+        output = self.regressor(attn_out)  # [batch*seq_len*nodes, 1]
+        output = output.reshape(batch_size, seq_len, num_nodes)
         
-        # Reshape to match expected output
-        return output.reshape(batch_size, num_nodes)  # [batch, nodes]
+        # Return predictions for last timestep
+        return output[:, -1, :]  # [batch, nodes]
