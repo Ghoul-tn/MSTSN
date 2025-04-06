@@ -143,10 +143,14 @@ class GambiaDroughtDataset(Dataset):
     
     def __getitem__(self, idx):
         pixel_idx, time_idx = self.valid_indices[idx]
-        y, x = self.valid_pixels[0][pixel_idx], self.valid_pixels[1][pixel_idx]
+        y, x = self.pixel_coords[pixel_idx]
         
-        # Get sequence and target
+        # Maintain spatial dimensions
         x_seq = self.features[time_idx:time_idx+self.seq_len, y, x, :]  # (seq_len, 3)
         y_target = self.targets[time_idx+self.seq_len, y, x]
         
-        return torch.FloatTensor(x_seq), torch.FloatTensor([y_target]).squeeze()
+        # Add height/width dimensions (1x1 grid per pixel)
+        return (
+            torch.FloatTensor(x_seq).unsqueeze(1).unsqueeze(1),  # (seq_len, 1, 1, 3)
+            torch.FloatTensor([y_target]).squeeze()
+        )
