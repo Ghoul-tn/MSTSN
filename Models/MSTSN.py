@@ -8,9 +8,10 @@ class MSTSN_Gambia(nn.Module):
     def __init__(self, adj_matrix, gcn_dim1=64, gcn_dim2=32, gru_dim=64, gru_layers=2):
         super().__init__()
         
-        # Store adjacency matrix as a dense tensor
-        self.adj = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
+        # Register adjacency matrix as buffer so it moves with model
+        adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
                                     else adj_matrix)
+        self.register_buffer('adj', adj_tensor)
         
         # Spatial Module
         self.gcn = GCN(
@@ -41,11 +42,15 @@ class MSTSN_Gambia(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, 3)
         batch_size = x.size(0)
         
+        # Get matching submatrix of adj for current batch
+        adj_batch = self.adj[:batch_size, :batch_size]
+        
+        # Ensure adj is on same device as input
+        adj_batch = adj_batch.to(x.device)
+        
         # Spatial processing
-        adj_batch = self.adj[:batch_size, :batch_size]  # Match batch size
         gcn_out = self.gcn(x, adj_batch)  # (batch_size, seq_len, gcn_dim2)
         
         # Temporal processing
@@ -54,6 +59,6 @@ class MSTSN_Gambia(nn.Module):
         # Attention
         attn_out, _ = self.attention(gru_out, gru_out, gru_out)
         
-        # Regression (use last timestep)
+        # Regression
         output = self.regressor(attn_out[:, -1, :])  # (batch_size, 1)
         return output.squeeze(1)  # (batch_size,)
