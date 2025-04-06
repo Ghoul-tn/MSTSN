@@ -184,30 +184,30 @@ def main():
         train_loss = 0.0
         train_preds = []
         train_targets = []
-        
-        for x, y in train_loader:
-                
-            x = x.to(device)  # [batch, seq_len, 2139, 3]
-            y = y.to(device)  # [batch, 2139]
-            # # Flatten spatial dimensions and apply mask
-            # batch_size = x.size(0)
-            # y = y.view(batch_size, -1)  # (batch, height*width)
-            # valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
-                
-            optimizer.zero_grad()
-                
-            # Forward pass
-            pred = model(x)
-            y = y.reshape(pred.shape)    
-            # Calculate masked loss
-            loss = loss_fn(pred, y)
-            loss.backward()
-            optimizer.step()
-                
-            # Store predictions and targets for metrics
-            train_preds.append(pred.detach().cpu().numpy())
-            train_targets.append(y.detach().cpu().numpy())
-            epoch.set_postfix(loss=loss.item())            
+        with tqdm(train_loader, unit="batch") as tepoch:
+            for x, y in train_loader:
+                tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")    
+                x = x.to(device)  # [batch, seq_len, 2139, 3]
+                y = y.to(device)  # [batch, 2139]
+                # # Flatten spatial dimensions and apply mask
+                # batch_size = x.size(0)
+                # y = y.view(batch_size, -1)  # (batch, height*width)
+                # valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+                    
+                optimizer.zero_grad()
+                    
+                # Forward pass
+                pred = model(x)
+                y = y.reshape(pred.shape)    
+                # Calculate masked loss
+                loss = loss_fn(pred, y)
+                loss.backward()
+                optimizer.step()
+                    
+                # Store predictions and targets for metrics
+                train_preds.append(pred.detach().cpu().numpy())
+                train_targets.append(y.detach().cpu().numpy())
+                tepoch.set_postfix(loss=loss.item())            
 
                 
 
