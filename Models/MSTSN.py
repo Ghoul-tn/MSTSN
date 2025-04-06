@@ -7,17 +7,18 @@ from Models.TEM.GRU import GRU
 class MSTSN_Gambia(nn.Module):
     def __init__(self, adj_matrix, gcn_dim1=128, gcn_dim2=64, gru_dim=128, gru_layers=2):
         super().__init__()
-        self.adj_matrix = adj_matrix
-        self.num_nodes = adj_matrix.shape[0]
-
+        
+        # Convert and register adjacency matrix
+        adj_tensor = torch.FloatTensor(adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') 
+                                      else adj_matrix)
+        self.register_buffer('adj', adj_tensor)
+        
         # Spatial Module
         self.gcn = GCN(
             input_dim=3,
             hidden_dim=gcn_dim1,
-            output_dim=gcn_dim2,
-            adj=adj_matrix
+            output_dim=gcn_dim2
         )
-
         # Temporal Module
         self.gru = nn.GRU(
             input_size=gcn_dim2,
@@ -32,14 +33,22 @@ class MSTSN_Gambia(nn.Module):
             nn.ReLU(),
             nn.Linear(64, self.num_nodes)
         )
-
     def forward(self, x):
-        """x shape: (batch, seq_len, num_nodes, 3)"""
-        # Spatial processing
-        batch_size, seq_len, num_nodes, _ = x.shape
-        x = x.view(batch_size*seq_len, num_nodes, -1)
-        gcn_out = self.gcn(x)  # (batch*seq_len, num_nodes, gcn_dim2)
-        gcn_out = gcn_out.view(batch_size, seq_len, num_nodes, -1)
+        """x shape: (batch_size, seq_len, height, width, channels)"""
+        batch_size, seq_len, h, w, _ = x.shape
+        num_nodes = h * w
+        
+        # Reshape to graph format
+        x = x.view(batch_size, seq_len, num_nodes, -1)  # (batch, seq_len, nodes, features)
+        
+        # Process each timestep
+        outputs = []
+        for t in range(seq_len):
+            x_t = x[:, t, :, :]  # (batch, nodes, features)
+            gcn_out = self.gcn(x_t, self.adj)  # (batch, nodes, gcn_dim2)
+            outputs.append(gcn_out.unsqueeze(1))
+            
+        gcn_out = torch.cat(outputs, dim=1)  # (batch, seq_len, nodes, gcn_dim2)
         
         # Temporal processing
         gru_out, _ = self.gru(gcn_out)  # (batch, seq_len, num_nodes, gru_dim)
