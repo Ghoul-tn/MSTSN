@@ -72,9 +72,9 @@ def evaluate(model, dataloader, device):
             x, y = x.to(device), y.to(device)
             
             # Flatten spatial dimensions
-            batch_size = x.size(0)
-            y = y.view(batch_size, -1)
-            valid_mask = valid_mask.view(batch_size, -1)
+            # batch_size = x.size(0)
+            # y = y.view(batch_size, -1)
+            # valid_mask = valid_mask.view(batch_size, -1)
             
             # Forward pass
             pred = model(x)
@@ -189,16 +189,16 @@ def main():
                 
             x = x.to(device)  # [batch, seq_len, 2139, 3]
             y = y.to(device)  # [batch, 2139]
-            # Flatten spatial dimensions and apply mask
-            batch_size = x.size(0)
-            y = y.view(batch_size, -1)  # (batch, height*width)
-            valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
+            # # Flatten spatial dimensions and apply mask
+            # batch_size = x.size(0)
+            # y = y.view(batch_size, -1)  # (batch, height*width)
+            # valid_mask = valid_mask.view(batch_size, -1)  # (batch, height*width)
                 
             optimizer.zero_grad()
                 
             # Forward pass
             pred = model(x)
-                
+            y = y.reshape(pred.shape)    
             # Calculate masked loss
             loss = loss_fn(pred, y)
             loss.backward()
