@@ -116,13 +116,13 @@ def main():
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=False,
         num_workers=2
     )
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch_size,
-        num_workers=2
+        num_workers=4
     )
 
     # Initialize model
@@ -161,10 +161,11 @@ def main():
         train_targets = []
         
         with tqdm(train_loader, unit="batch") as tepoch:
-            for x, y in tepoch:
+            for batch in tepoch:
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
                 
-                x, y = x.to(device), y.to(device)
+                x, y = batch  # Direct unpacking
+                x, y = x.to(device), y.to(device)  
                 y = y.flatten()
                 optimizer.zero_grad()
                 
