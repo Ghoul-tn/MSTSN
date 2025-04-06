@@ -42,30 +42,35 @@ class MSTSN_Gambia(nn.Module):
             nn.Linear(64, 1)  # Predict single value per node
         )
 
-    def forward(self, x):
-        """x shape: (batch_size, seq_len, num_nodes, features)"""
-        batch_size, seq_len, num_nodes, _ = x.shape
-        assert num_nodes == self.num_nodes, f"Expected {self.num_nodes} nodes, got {num_nodes}"
-        
-        # Process each timestep
-        outputs = []
-        for t in range(seq_len):
-            x_t = x[:, t, :, :]  # [batch_size, num_nodes, features]
-            gcn_out = self.gcn(x_t, self.adj)  # [batch_size, num_nodes, gcn_dim2]
-            outputs.append(gcn_out.unsqueeze(1))
-        
-        # Stack temporal outputs [batch_size, seq_len, num_nodes, gcn_dim2]
-        gcn_out = torch.cat(outputs, dim=1)
-        
-        # Temporal processing
-        gru_in = gcn_out.reshape(batch_size, seq_len, -1)  # Flatten nodes
-        gru_out, _ = self.gru(gru_in)
-        
-        # Attention
-        attn_out, _ = self.attention(gru_out, gru_out, gru_out)
-        
-        # Regression (predict for each node)
-        node_features = attn_out[:, -1, :].reshape(batch_size, self.num_nodes, -1)
-        output = self.regressor(node_features)
-        
-        return output.squeeze(-1)  # [batch_size, num_nodes]
+def forward(self, x):
+    """x shape: (batch_size, seq_len, num_nodes, features)"""
+    batch_size, seq_len, num_nodes, _ = x.shape
+    
+    # Process each timestep through GCN
+    gcn_outputs = []
+    for t in range(seq_len):
+        x_t = x[:, t, :, :]  # [batch, nodes, features]
+        gcn_out = self.gcn(x_t, self.adj)  # [batch, nodes, gcn_dim2]
+        gcn_outputs.append(gcn_out.unsqueeze(1))  # Add seq dimension
+    
+    # Combine temporal outputs [batch, seq_len, nodes, gcn_dim2]
+    gcn_out = torch.cat(gcn_outputs, dim=1)
+    
+    # Prepare for GRU: [batch, nodes, seq_len, gcn_dim2]
+    gru_in = gcn_out.permute(0, 2, 1, 3)
+    
+    # Process each node's time series independently
+    gru_out, _ = self.gru(gru_in.reshape(-1, seq_len, self.gcn_dim2))
+    gru_out = gru_out.reshape(batch_size, num_nodes, seq_len, -1)
+    
+    # Attention across time steps
+    attn_in = gru_out.permute(0, 2, 1, 3)  # [batch, seq, nodes, gru_dim]
+    attn_out, _ = self.attention(
+        attn_in.reshape(-1, num_nodes, self.gru_dim),
+        attn_in.reshape(-1, num_nodes, self.gru_dim),
+        attn_in.reshape(-1, num_nodes, self.gru_dim)
+    )
+    
+    # Final prediction
+    output = self.regressor(attn_out[:, -1, :])  # Use last timestep
+    return output.reshape(batch_size, num_nodes)
