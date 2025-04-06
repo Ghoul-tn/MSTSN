@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 import scipy.sparse
-from tqdm import tqdm  # For progress bars
+from tqdm import tqdm
 
 class GambiaDataProcessor:
     def __init__(self, data_path):
@@ -15,27 +15,31 @@ class GambiaDataProcessor:
         """Step 1: Data Preparation with verbose logging"""
         print("\n=== Loading and Processing Raw Data ===")
         
-        # Load data with shape verification
+        # Load data - now handling 3D arrays
         print("\nLoading variables from .npz file:")
-        ndvi = self.data['NDVI'][:, :, :, 0]
-        soil = self.data['SoilMoisture'][:, :, :, 0]
-        spi = self.data['SPI'][:, :, :, 0]
-        lst = self.data['LST'][:, :, :, 0]
+        ndvi = self.data['NDVI']  # Shape: (timesteps, height, width)
+        soil = self.data['SoilMoisture']
+        spi = self.data['SPI']
+        lst = self.data['LST']
         
         print(f"Original shapes - NDVI: {ndvi.shape}, Soil: {soil.shape}, "
               f"SPI: {spi.shape}, LST: {lst.shape}")
 
-        # Create valid pixel mask
+        # Verify all arrays have same dimensions
+        assert ndvi.shape == soil.shape == spi.shape == lst.shape, "All input arrays must have same dimensions"
+
+        # Create valid pixel mask (using SPI as reference)
         print("\nCreating valid pixel mask...")
         self.valid_pixels = np.where(~np.isnan(spi).all(axis=0))
         valid_count = len(self.valid_pixels[0])
-        print(f"Found {valid_count} valid pixels (out of {spi.shape[1]*spi.shape[2]} total)")
+        total_pixels = spi.shape[1] * spi.shape[2]
+        print(f"Found {valid_count} valid pixels (out of {total_pixels} total)")
         
         # Create adjacency matrix
         print("\nBuilding adjacency matrix (5km neighborhood)...")
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
-        adj = (distances <= 10).astype(float)
+        adj = (distances <= 5).astype(float)
         np.fill_diagonal(adj, 0)
         
         # Calculate connectivity statistics
@@ -50,16 +54,19 @@ class GambiaDataProcessor:
         # Normalization
         print("\nNormalizing features...")
         def normalize(x):
-            mean = np.nanmean(x)
-            std = np.nanstd(x)
+            x_valid = x[:, self.valid_pixels[0], self.valid_pixels[1]]
+            mean = np.nanmean(x_valid)
+            std = np.nanstd(x_valid)
             print(f"Normalizing {x.shape} - mean: {mean:.3f}, std: {std:.3f}")
             return (x - mean) / std
             
+        # Stack normalized features along new channel dimension
         features = np.stack([
             normalize(ndvi), 
             normalize(soil), 
             normalize(lst)
-        ], axis=-1)
+        ], axis=-1)  # New shape: (timesteps, height, width, channels)
+        
         targets = normalize(spi)
         
         print("\nFinal processed shapes:")
@@ -69,7 +76,7 @@ class GambiaDataProcessor:
         return features, targets
 
 class GambiaDroughtDataset(Dataset):
-    """Step 2: PyTorch Dataset with progress tracking"""
+    """Dataset class with progress tracking"""
     def __init__(self, features, targets, valid_pixels, seq_len=12):
         print(f"\nInitializing Dataset with sequence length: {seq_len}")
         self.features = features
@@ -98,18 +105,11 @@ class GambiaDroughtDataset(Dataset):
         pixel_idx, time_idx = self.valid_indices[idx]
         y, x = self.pixel_coords[pixel_idx]
         
-        # Verify shapes during first access
-        if idx == 0:
-            print("\nFirst sample shapes:")
-            print(f"Input sequence: {self.features[time_idx:time_idx+self.seq_len, y, x, :].shape}")
-            print(f"Target value: {self.targets[time_idx+self.seq_len, y, x].shape}")
-        
         x_seq = self.features[time_idx:time_idx+self.seq_len, y, x, :]
         y_target = self.targets[time_idx+self.seq_len, y, x]
         
         return torch.FloatTensor(x_seq), torch.FloatTensor([y_target])
 
-# Example usage with verbose output
 if __name__ == "__main__":
     print("=== Running Data Preparation Test ===")
     processor = GambiaDataProcessor(
