@@ -96,12 +96,12 @@ def main():
     # Load and prepare data
     print("\n=== Loading Data ===")
     processor = GambiaDataProcessor(args.data_path)
-    features, targets = processor.process_data()
+    features, targets = processor.process_data()  # Sets valid_pixels and num_nodes
     
     dataset = GambiaDroughtDataset(
         features=features,
         targets=targets,
-        valid_pixels=processor.valid_pixels,
+        valid_pixels=processor.valid_pixels,  # Now properly initialized
         seq_len=args.seq_len
     )
     
