@@ -71,7 +71,18 @@ def evaluate(model, dataloader, device):
     y_pred = torch.cat(all_preds).flatten()
     
     return compute_metrics(y_true.cpu().numpy(), y_pred.cpu().numpy())
+class DroughtLoss(nn.Module):
+    def __init__(self, base_loss=nn.MSELoss(), alpha=2.0):
+        super().__init__()
+        self.base_loss = base_loss
+        self.alpha = alpha  # Weight for drought periods
 
+    def forward(self, pred, target):
+        base = self.base_loss(pred, target)
+        # Extra penalty for drought mispredictions
+        drought_mask = (target < -0.5).float()
+        drought_err = (pred - target).abs() * drought_mask
+        return base + self.alpha * drought_err.mean()
 def main():
     args = parse_args()
     
@@ -128,15 +139,14 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay
     )
-    loss_fn = torch.nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    loss_fn = DroughtLoss(base_loss=nn.HuberLoss(delta=0.5))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        mode='min',
-        patience=5,
-        factor=0.5,
-        verbose=True
+        max_lr=5e-4,
+        steps_per_epoch=len(train_loader),
+        epochs=args.epochs
     )
-
     # Training loop
     best_val_rmse = float('inf')
     history = {'train': [], 'val': []}
