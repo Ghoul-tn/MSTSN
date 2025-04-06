@@ -3,7 +3,7 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tqdm import tqdm
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
@@ -47,15 +47,10 @@ def parse_args():
     return parser.parse_args()
 
 def collate_fn(batch):
-    features = [item[0] for item in batch]  # List of (seq_len, 1, 1, 3)
-    targets = [item[1] for item in batch]
-    
-    # Stack with added batch dimension
-    return (
-        torch.stack(features, dim=0),  # (batch_size, seq_len, 1, 1, 3)
-        torch.stack(targets, dim=0)
-    )
-
+    """Handle custom batch preparation"""
+    features = torch.stack([item[0] for item in batch])  # (batch, seq_len, 1, 1, 3)
+    targets = torch.stack([item[1] for item in batch])   # (batch,)
+    return features, targets
 def compute_metrics(y_true, y_pred):
     """Calculate all regression metrics"""
     return {
@@ -116,10 +111,19 @@ def main():
     )
     
 
-    # Create sequential splits instead of random splits
-    split_idx = int(0.8 * len(dataset))
-    train_set = Subset(dataset, range(0, split_idx))
-    val_set = Subset(dataset, range(split_idx, len(dataset)))
+    # Time-series appropriate splitting (no shuffling)
+    total_samples = len(dataset)
+    train_size = int(0.8 * total_samples)
+    
+    # Create indices for temporal split
+    indices = list(range(total_samples))
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+    
+    # Create subsets
+    train_set = Subset(dataset, train_indices)
+    val_set = Subset(dataset, val_indices)
+    
         
     train_loader = DataLoader(
         train_set,
