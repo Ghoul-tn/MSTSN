@@ -148,7 +148,7 @@ def main():
         train_set,
         batch_size=args.batch_size,
         shuffle=False,  # Critical for time series
-        num_workers=2,
+        num_workers=4,
         collate_fn=collate_fn
     )
     
@@ -157,7 +157,7 @@ def main():
         val_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=4,
         collate_fn=collate_fn
     )
     # Model initialization
