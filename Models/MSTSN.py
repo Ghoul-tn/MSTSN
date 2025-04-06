@@ -5,61 +5,56 @@ from Models.TEM.GRU import GRU
 class MSTSN_Gambia(nn.Module):
     def __init__(self, adj_matrix, gcn_dim1=64, gcn_dim2=32, gru_dim=64, gru_layers=2):
         super().__init__()
+        # Convert adj matrix to sparse tensor
+        adj_coo = adj_matrix.tocoo()
+        indices = torch.LongTensor(np.vstack((adj_coo.row, adj_coo.col)))
+        values = torch.FloatTensor(adj_coo.data)
+        shape = adj_coo.shape
+        self.adj = torch.sparse.FloatTensor(indices, values, shape).to_dense()
         
-        # Store config
-        self.gcn_dim1 = gcn_dim1
-        self.gcn_dim2 = gcn_dim2
-        self.gru_dim = gru_dim
-        self.gru_layers = gru_layers
-        
-        # Convert sparse adj matrix to dense if needed
-        adj_dense = adj_matrix.toarray() if hasattr(adj_matrix, 'toarray') else adj_matrix
-        
-        # Spatial Module (GNN)
         self.gcn = GCN(
             input_dim=3,  # NDVI, Soil, LST
-            output_dim1=gcn_dim1,
-            output_dim2=gcn_dim2,
-            adj=adj_dense
+            hidden_dim=gcn_dim1,
+            output_dim=gcn_dim2,
+            adj=self.adj
         )
         
-        # Temporal Module
         self.gru = GRU(
             feature_size=gcn_dim2,
             hidden_size=gru_dim,
             num_layers=gru_layers,
-            output_size=gru_dim  # Same as hidden size
+            output_size=gru_dim
         )
         
-        # Attention
         self.attention = nn.MultiheadAttention(
             embed_dim=gru_dim,
-            num_heads=4,
-            dropout=0.1
+            num_heads=4
         )
         
-        # Regression Head
         self.regressor = nn.Sequential(
             nn.Linear(gru_dim, 32),
             nn.ReLU(),
-            nn.Dropout(0.2),
             nn.Linear(32, 1)
         )
-    
+
     def forward(self, x):
-        # x shape: (batch, seq_len, 3)
-        batch_size = x.shape[0]
+        # x shape: (batch_size, seq_len, 3)
+        batch_size, seq_len, _ = x.shape
+        
+        # Reshape for GCN: (seq_len, batch_size, features)
+        x = x.permute(1, 0, 2)
         
         # Spatial processing
-        x_spatial = x.permute(1, 0, 2)  # (seq_len, batch, 3)
-        gcn_out = self.gcn(x_spatial)    # (seq_len, batch, gcn_dim2)
+        gcn_out = self.gcn(x)  # (seq_len, batch_size, gcn_dim2)
         
         # Temporal processing
-        gru_out = self.gru(gcn_out)      # (seq_len, batch, gru_dim)
+        gru_out, _ = self.gru(gcn_out)  # (seq_len, batch_size, gru_dim)
+        
+        # Attention
         attn_out, _ = self.attention(
             gru_out, gru_out, gru_out
         )
         
-        # Regression
-        output = self.regressor(attn_out[-1])  # Use last timestep
+        # Regression (use last timestep)
+        output = self.regressor(attn_out[-1])
         return output.squeeze()
