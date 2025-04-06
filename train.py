@@ -122,7 +122,7 @@ def main():
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch_size,
-        num_workers=4
+        num_workers=2
     )
 
     # Initialize model
