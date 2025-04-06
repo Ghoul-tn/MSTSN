@@ -48,11 +48,17 @@ def parse_args():
 
 def collate_fn(batch):
     """Process full spatial snapshots"""
+    # Stack features and targets
     features = torch.stack([torch.FloatTensor(item[0]) for item in batch])  # (batch, seq_len, H, W, 3)
     targets = torch.stack([torch.FloatTensor(item[1]) for item in batch])   # (batch, H, W)
     
-    # Mask invalid pixels
+    # Create masks for valid pixels
     valid_mask = ~torch.isnan(targets)
+    
+    # Replace NaNs with 0 (will be masked)
+    features = torch.nan_to_num(features, nan=0)
+    targets = torch.nan_to_num(targets, nan=0)
+    
     return features, targets, valid_mask
 
 def compute_metrics(y_true, y_pred, valid_mask):
