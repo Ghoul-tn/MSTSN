@@ -1,57 +1,41 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
-import numpy as np
+import torch.nn.functional as F
+from torch_geometric.nn import GATConv
 
-def cal_adj_norm(adj):
-    node_num = adj.shape[0]
-    adj = np.asarray(adj)
-    adj_ = adj + np.eye(node_num)
-    # 度矩阵
-    d = np.sum(adj_,1)
-    d_sqrt = np.power(d, -0.5)
-    d_sqrt = np.diag(d_sqrt)
-    adj_norm = np.dot(np.dot(d_sqrt, adj_), d_sqrt)
-    return adj_norm
-
-class GCN(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
+class AdaptiveAdjacency(nn.Module):
+    def __init__(self, num_nodes, hidden_dim):
         super().__init__()
-        self.layer1 = GraphConvolution(input_dim, hidden_dim)
-        self.layer2 = GraphConvolution(hidden_dim, output_dim)
-        
-    def forward(self, x, adj):
-        """Process batched graph data
-        Args:
-            x: (batch_size, num_nodes, input_dim)
-            adj: (num_nodes, num_nodes)
-        Returns:
-            (batch_size, num_nodes, output_dim)
-        """
-        # Process each sample in batch
-        batch_size = x.size(0)
-        outputs = []
-        adj = adj.to(x.device)
-        
-        for i in range(batch_size):
-            x_i = x[i]  # (num_nodes, input_dim)
-            x_i = self.layer1(x_i, adj)
-            x_i = self.layer2(x_i, adj)
-            outputs.append(x_i.unsqueeze(0))
-            
-        return torch.cat(outputs, dim=0)
+        self.embedding = nn.Parameter(torch.randn(num_nodes, hidden_dim))
+        self.learned_adj = None
 
-class GraphConvolution(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def forward(self):
+        norm_embed = F.normalize(self.embedding, p=2, dim=1)
+        self.learned_adj = torch.mm(norm_embed, norm_embed.t())
+        return self.learned_adj
+
+class GATLayer(nn.Module):
+    def __init__(self, in_dim, out_dim, heads=4):
         super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
-        self.activation = nn.ReLU()
-        
-    def forward(self, x, adj):
-        # Linear transformation
-        x = self.linear(x)  # (num_nodes, output_dim)
-        
-        # Graph propagation
-        x = torch.mm(adj, x)  # (num_nodes, output_dim)
-        
-        return self.activation(x)
+        self.gat = GATConv(in_dim, out_dim, heads=heads, concat=True)
+        self.norm = nn.LayerNorm(out_dim * heads)
+
+    def forward(self, x, edge_index):
+        x = self.gat(x, edge_index)
+        return self.norm(x)
+
+class SpatialProcessor(nn.Module):
+    def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
+        super().__init__()
+        self.adaptive_adj = AdaptiveAdjacency(num_nodes, hidden_dim)
+        self.gat1 = GATLayer(in_dim, hidden_dim)
+        self.gat2 = GATLayer(hidden_dim * 4, out_dim)  # Multiply by heads (4)
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        adj = self.adaptive_adj()
+        edge_index = adj.nonzero(as_tuple=False).t()  # Convert dense adj to edge_index
+        x = F.relu(self.gat1(x, edge_index))
+        x = self.dropout(x)
+        x = self.gat2(x, edge_index)
+        return x
