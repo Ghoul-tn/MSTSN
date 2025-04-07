@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from Models.SAM.GCN import GCN
-from Models.TEM.GRU import GRU
+from Models.TEM.GRU import GRU, EnhancedGRU
 
 class MSTSN_Gambia(nn.Module):
     def __init__(self, adj_matrix, gcn_dim1=128, gcn_dim2=64, gru_dim=128, gru_layers=2):
@@ -25,11 +25,7 @@ class MSTSN_Gambia(nn.Module):
         )
         
         # Temporal Module
-        self.gru = GRU(
-            input_size=gcn_dim2,
-            hidden_size=gru_dim,
-            num_layers=gru_layers
-        )
+        self.gru = EnhancedGRU(gcn_dim2, gru_dim, gru_layers)
         
         # Attention
         self.attention = nn.MultiheadAttention(
@@ -40,12 +36,13 @@ class MSTSN_Gambia(nn.Module):
         
         # Regression Head
         self.regressor = nn.Sequential(
-            nn.Linear(gru_dim, 64),
+            nn.Linear(2*gru_dim, 256),
             nn.GELU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 1)
+            nn.Dropout(0.5),
+            nn.LayerNorm(256),
+            nn.Linear(256, 1)
         )
-
+        self.dropout = nn.Dropout(0.4)
     def forward(self, x):
         """x shape: (batch_size, seq_len, num_nodes, features)"""
         batch_size, seq_len, num_nodes, _ = x.shape
