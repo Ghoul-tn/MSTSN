@@ -101,7 +101,7 @@ class GambiaDataProcessor:
         print("- SPI: QuantileTransformer (Gaussian) applied")
 
         # Create adjacency matrix
-        print("\nBuilding adjacency matrix (5km neighborhood)...")
+        print("\nBuilding adjacency matrix ...")
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
         self.adj_matrix = (distances <= 10).astype(float)
