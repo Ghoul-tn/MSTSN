@@ -134,7 +134,7 @@ class GambiaDroughtDataset(Dataset):
         self.targets = targets[:, y_idx, x_idx]       # [time, 2139]
         self.valid_pixels = valid_pixels
         self.seq_len = seq_len
-        
+        self.training = False
         # Generate valid indices (pixel_idx, time_idx)
         self.valid_indices = []
         num_pixels = len(valid_pixels[0])
