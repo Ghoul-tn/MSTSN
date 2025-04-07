@@ -122,8 +122,9 @@ def main():
     
     # Create subsets
     train_set = Subset(dataset, train_indices)
+    train_set.dataset.training = True  # Enable augmentations
     val_set = Subset(dataset, val_indices)
-    
+    val_set.dataset.training = False  # Disable augmentations
         
     train_loader = DataLoader(
         train_set,
