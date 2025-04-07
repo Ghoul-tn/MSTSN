@@ -8,7 +8,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tqdm import tqdm
 import random
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
-from Models.MSTSN import MSTSN_Gambia
+from Models.MSTSN import EnhancedMSTSN
 
 class EarlyStopper:
     def __init__(self, patience=15, min_delta=0.005):
