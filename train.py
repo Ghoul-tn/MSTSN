@@ -25,16 +25,19 @@ class EarlyStopper:
             self.counter += 1
         return self.counter >= self.patience
 
-class DroughtAwareLoss(nn.Module):
-    def __init__(self, base_loss=nn.HuberLoss(delta=0.5), alpha=3.0):
+class ImprovedDroughtLoss(nn.Module):
+    def __init__(self, base_loss=nn.HuberLoss(delta=0.5), alpha=3.0, gamma=2.0):
         super().__init__()
         self.base_loss = base_loss
         self.alpha = alpha
+        self.gamma = gamma
 
     def forward(self, pred, target):
         base = self.base_loss(pred, target)
         drought_mask = (target < -0.5).float()
-        drought_err = torch.abs(pred - target) * drought_mask
+        error = torch.abs(pred - target)
+        focal_weight = (1 - torch.exp(-error)) ** self.gamma
+        drought_err = focal_weight * error * drought_mask
         return base + self.alpha * torch.mean(drought_err)
 
 class DroughtMetrics:
@@ -160,12 +163,12 @@ def main():
     )
 
     # Model initialization
-    model = MSTSN_Gambia(
-        adj_matrix=processor.adj_matrix,
+    model = EnhancedMSTSN(
+        num_nodes=processor.adj_matrix.shape[0],
         gcn_dim1=args.gcn_dim1,
         gcn_dim2=args.gcn_dim2,
-        gru_dim=args.gru_dim,
-        gru_layers=args.gru_layers
+        transformer_dim=args.gru_dim,
+        num_heads=4
     ).to(device)
     
     # Training setup
@@ -174,7 +177,7 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay
     )
-    loss_fn = DroughtAwareLoss()
+    loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=args.lr*2,
