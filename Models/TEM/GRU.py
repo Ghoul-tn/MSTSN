@@ -1,35 +1,19 @@
-# 定义GRU网络
-from torch import nn
+import torch
+import torch.nn as nn
 
-
-class GRU(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers):
+class TemporalTransformer(nn.Module):
+    def __init__(self, input_dim, num_heads, ff_dim, num_layers):
         super().__init__()
-        self.gru = nn.GRU(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=input_dim,
+            nhead=num_heads,
+            dim_feedforward=ff_dim,
             batch_first=True
         )
-        
-    def forward(self, x):
-        output, hidden = self.gru(x)
-        return output, hidden
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.norm = nn.LayerNorm(input_dim)
 
-class EnhancedGRU(nn.Module):
-    """Bidirectional GRU with Layer Normalization"""
-    def __init__(self, input_size, hidden_size, num_layers):
-        super().__init__()
-        self.gru = nn.GRU(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            bidirectional=True,
-            batch_first=True,
-            dropout=0.2 if num_layers > 1 else 0
-        )
-        self.norm = nn.LayerNorm(2*hidden_size)
-        
     def forward(self, x):
-        output, _ = self.gru(x)
-        return self.norm(output)
+        # x shape: [batch * nodes, seq_len, features]
+        x = self.transformer(x)
+        return self.norm(x)
