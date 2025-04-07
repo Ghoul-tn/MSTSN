@@ -5,6 +5,7 @@ import scipy.sparse
 from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer
 from scipy.interpolate import interp1d
+import random
 
 class GambiaDataProcessor:
     def __init__(self, data_path):
@@ -151,14 +152,27 @@ class GambiaDroughtDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        # Randomly sample sequence length
-        actual_seq_len = random.randint(self.seq_len//2, self.seq_len)
-        start_idx = idx - actual_seq_len
+        """Returns:
+           x: [seq_len, num_nodes, features]
+           y: [num_nodes]
+        """
+        # Ensure we don't go out of bounds
+        start_idx = max(0, idx - self.seq_len)
+        
+        # Get sequence with consistent length
         x_seq = self.features[start_idx:idx]
-        # Apply random masking
-        mask = torch.rand_like(x_seq) < 0.1
-        x_seq[mask] = 0
-        return x_seq, self.targets[idx]
+        
+        # Pad if sequence is shorter than seq_len
+        if len(x_seq) < self.seq_len:
+            padding = np.zeros((self.seq_len - len(x_seq), *x_seq.shape[1:]))
+            x_seq = np.concatenate([padding, x_seq])
+        
+        # Apply random masking augmentation
+        if self.training:  # Only augment during training
+            mask = np.random.rand(*x_seq.shape) < 0.1
+            x_seq[mask] = 0
+        
+        return torch.FloatTensor(x_seq), torch.FloatTensor(self.targets[idx])
 
     def __len__(self):
         return len(self.features) - self.seq_len
