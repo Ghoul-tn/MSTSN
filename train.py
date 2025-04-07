@@ -79,19 +79,23 @@ def collate_fn(batch):
     targets = torch.stack([item[1] for item in batch])
     return features, targets
 
-def compute_metrics(y_true, y_pred):
-    return {
+def compute_metrics(y_true, y_pred, loss=None):
+    metrics = {
         'mse': mean_squared_error(y_true, y_pred),
         'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
-        'mae': mean_absolute_error(y_true, y_pred),  # Fixed this line
+        'mae': mean_absolute_error(y_true, y_pred),
         'r2': r2_score(y_true, y_pred),
         **DroughtMetrics.calculate(y_true, y_pred)
     }
-
-def evaluate(model, dataloader, device):
+    if loss is not None:
+        metrics['loss'] = loss
+    return metrics
+    
+def evaluate(model, dataloader, device, loss_fn=None):
     model.eval()
     all_preds = []
     all_targets = []
+    total_loss = 0.0
     
     with torch.no_grad():
         for x, y in dataloader:
@@ -99,10 +103,13 @@ def evaluate(model, dataloader, device):
             preds = model(x)
             all_preds.append(preds.cpu().numpy())
             all_targets.append(y.cpu().numpy())
+            if loss_fn is not None:
+                total_loss += loss_fn(preds, y).item() * x.size(0)
     
     y_true = np.concatenate(all_targets)
     y_pred = np.concatenate(all_preds)
-    return compute_metrics(y_true, y_pred)
+    loss = total_loss / len(dataloader.dataset) if loss_fn is not None else None
+    return compute_metrics(y_true, y_pred, loss=loss)
 
 def main():
     args = parse_args()
@@ -208,13 +215,14 @@ def main():
         # Training metrics
         train_metrics = compute_metrics(
             np.concatenate(train_targets),
-            np.concatenate(train_preds)
+            np.concatenate(train_preds),
+            loss=train_loss / len(train_loader.dataset)
         )
         train_metrics['loss'] = train_loss / len(train_loader.dataset)
         history['train'].append(train_metrics)
 
         # Validation
-        val_metrics = evaluate(model, val_loader, device)
+        val_metrics = evaluate(model, val_loader, device, loss_fn=loss_fn)
         history['val'].append(val_metrics)
 
         # Early stopping check
@@ -234,11 +242,12 @@ def main():
             }, f"{args.results_dir}/best_model.pth")
 
         # Epoch summary
-        print(f"\nEpoch {epoch+1}/{args.epochs}:")
-        print(f"Train Loss: {train_metrics['loss']:.4f} | RMSE: {train_metrics['rmse']:.4f} | R²: {train_metrics['r2']:.4f}")
-        print(f"Val RMSE: {val_metrics['rmse']:.4f} | DR: {val_metrics['detection_rate']:.2%} | FA: {val_metrics['false_alarm']:.2%}")
-        print(f"LR: {optimizer.param_groups[0]['lr']:.2e}")
-
+        print(f"\nEpoch {epoch+1}/{args.epochs} Summary:")
+        print("  Training - ", end="")
+        print(" | ".join([f"{k.upper()}: {v:.4f}" for k, v in train_metrics.items()]))
+        print("  Validation - ", end="")
+        print(" | ".join([f"{k.upper()}: {v:.4f}" for k, v in val_metrics.items()]))
+        print(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
     # Final save
     torch.save(model.state_dict(), f"{args.results_dir}/final_model.pth")
     torch.save(history, f"{args.results_dir}/training_history.pt")
