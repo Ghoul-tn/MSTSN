@@ -18,12 +18,10 @@ class MSTSN_Gambia(nn.Module):
                                      else adj_matrix)
         self.register_buffer('adj', adj_tensor)
         
-        # Enhanced Spatial Module
-        self.gcn = nn.Sequential(
-            GCN(input_dim=3, hidden_dim=gcn_dim1, output_dim=gcn_dim2),
-            nn.Dropout(0.3),
-            nn.LayerNorm(gcn_dim2)
-        )
+        # Enhanced Spatial Module - separate the GCN from the sequential container
+        self.gcn = GCN(input_dim=3, hidden_dim=gcn_dim1, output_dim=gcn_dim2)
+        self.gcn_dropout = nn.Dropout(0.3)
+        self.gcn_norm = nn.LayerNorm(gcn_dim2)
         
         # Enhanced Temporal Module with Bidirectional GRU and Attention
         self.temporal_processor = EnhancedGRU(
@@ -60,7 +58,11 @@ class MSTSN_Gambia(nn.Module):
         gcn_outputs = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]  # [batch, nodes, 3]
-            gcn_out = self.gcn((x_t, self.adj))  # Modified GCN interface
+            # Call GCN with separate arguments
+            gcn_out = self.gcn(x_t, self.adj)
+            # Apply dropout and norm
+            gcn_out = self.gcn_dropout(gcn_out)
+            gcn_out = self.gcn_norm(gcn_out)
             gcn_outputs.append(gcn_out.unsqueeze(1))
         
         gcn_out = torch.cat(gcn_outputs, dim=1)  # [batch, seq_len, nodes, gcn_dim2]
