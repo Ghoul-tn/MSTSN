@@ -151,13 +151,14 @@ class GambiaDroughtDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        """Returns:
-           x: [seq_len, 2139, 3]
-           y: [2139]
-        """
-        x_seq = self.features[idx:idx+self.seq_len]
-        y_target = self.targets[idx+self.seq_len]
-        return torch.FloatTensor(x_seq), torch.FloatTensor(y_target)
+        # Randomly sample sequence length
+        actual_seq_len = random.randint(self.seq_len//2, self.seq_len)
+        start_idx = idx - actual_seq_len
+        x_seq = self.features[start_idx:idx]
+        # Apply random masking
+        mask = torch.rand_like(x_seq) < 0.1
+        x_seq[mask] = 0
+        return x_seq, self.targets[idx]
 
     def __len__(self):
         return len(self.features) - self.seq_len
