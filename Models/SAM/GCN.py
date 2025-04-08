@@ -21,7 +21,7 @@ class BatchedGAT(nn.Module):
         self.gat = GATv2Conv(in_dim, out_dim // heads, heads=heads, concat=True)  # Ensure output is out_dim
         self.norm = nn.LayerNorm(out_dim)
         
-    def _forward(self, x, adj):
+    def forward(self, x, adj):
         batch_size, num_nodes, _ = x.shape
         outputs = []
         for b in range(batch_size):
