@@ -7,6 +7,9 @@ from torch.utils.data import DataLoader, Subset
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tqdm import tqdm
 import random
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.parallel_loader as pl
+from torch_xla.amp import autocast, GradScaler
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
 from Models.MSTSN import EnhancedMSTSN
 
@@ -60,16 +63,10 @@ def parse_args():
     parser.add_argument('--seq_len', type=int, default=12)
     
     # Training parameters
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=16)  # Increased for TPU
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-3)
-    
-    # Model parameters
-    parser.add_argument('--gcn_dim1', type=int, default=128)
-    parser.add_argument('--gcn_dim2', type=int, default=256)
-    parser.add_argument('--gru_dim', type=int, default=192)
-    parser.add_argument('--gru_layers', type=int, default=3)
     
     # System parameters
     parser.add_argument('--results_dir', type=str, 
@@ -78,9 +75,8 @@ def parse_args():
     return parser.parse_args()
 
 def collate_fn(batch):
-    features = torch.stack([item[0] for item in batch])
-    targets = torch.stack([item[1] for item in batch])
-    return features, targets
+    features, targets = torch.stack([item[0] for item in batch]), torch.stack([item[1] for item in batch])
+    return features.half(), targets.half()  # FP16 for memory savings
 
 def compute_metrics(y_true, y_pred, loss=None):
     metrics = {
@@ -117,7 +113,9 @@ def evaluate(model, dataloader, device, loss_fn=None):
 def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # TPU Setup
+    device = xm.xla_device()
     early_stopper = EarlyStopper()
 
     # Data loading
@@ -143,53 +141,50 @@ def main():
     train_set.dataset.training = True
     val_set.dataset.training = False
 
-    # Data loaders
+    # TPU-Optimized DataLoaders
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=8,
         collate_fn=collate_fn,
-        pin_memory=True
+        pin_memory=True,
+        drop_last=True  # Required for TPU
     )
-    
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=8,
         collate_fn=collate_fn,
-        pin_memory=True
+        pin_memory=True,
+        drop_last=True
     )
+    
+    # Wrap with TPU parallel loader
+    train_loader = pl.MpDeviceLoader(train_loader, device)
+    val_loader = pl.MpDeviceLoader(val_loader, device)
 
     # Model initialization
-    model = EnhancedMSTSN(
-        num_nodes=processor.adj_matrix.shape[0],
-        gcn_dim1=args.gcn_dim1,
-        gcn_dim2=args.gcn_dim2,
-        transformer_dim=args.gru_dim,
-        num_heads=4
-    ).to(device)
-    
-    # Training setup
-    optimizer = torch.optim.AdamW(
+    model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
+    model = xmp.MpModelWrapper(model)  # For multi-core TPU
+
+    # Adafactor optimizer (memory-efficient for TPU)
+    optimizer = torch.optim.Adafactor(
         model.parameters(),
         lr=args.lr,
-        weight_decay=args.weight_decay
+        weight_decay=args.weight_decay,
+        relative_step=False
     )
+    
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=args.lr*2,
-        steps_per_epoch=len(train_loader),
-        epochs=args.epochs
-    )
+    scaler = GradScaler()
 
     # Training loop
     best_val_rmse = float('inf')
     history = {'train': [], 'val': []}
     
-    print("\n=== Starting Enhanced Training ===")
+    print("\n=== Starting TPU Training ===")
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0.0
@@ -199,16 +194,16 @@ def main():
         with tqdm(train_loader, unit="batch") as tepoch:
             for x, y in tepoch:
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
-                x, y = x.to(device), y.to(device)
                 
                 optimizer.zero_grad()
-                pred = model(x)
-                loss = loss_fn(pred, y)
                 
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
+                with autocast():  # Mixed precision
+                    pred = model(x)
+                    loss = loss_fn(pred, y)
+                
+                scaler.scale(loss).backward()
+                xm.optimizer_step(optimizer)
+                scaler.update()
                 
                 train_loss += loss.item() * x.size(0)
                 train_preds.append(pred.detach().cpu().numpy())
@@ -221,7 +216,6 @@ def main():
             np.concatenate(train_preds),
             loss=train_loss / len(train_loader.dataset)
         )
-        train_metrics['loss'] = train_loss / len(train_loader.dataset)
         history['train'].append(train_metrics)
 
         # Validation
@@ -236,7 +230,7 @@ def main():
         # Save best model
         if val_metrics['rmse'] < best_val_rmse:
             best_val_rmse = val_metrics['rmse']
-            torch.save({
+            xm.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -246,13 +240,11 @@ def main():
 
         # Epoch summary
         print(f"\nEpoch {epoch+1}/{args.epochs} Summary:")
-        print("  Training - ", end="")
-        print(" | ".join([f"{k.upper()}: {v:.4f}" for k, v in train_metrics.items()]))
-        print("  Validation - ", end="")
-        print(" | ".join([f"{k.upper()}: {v:.4f}" for k, v in val_metrics.items()]))
-        print(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
+        print("  Training - " + " | ".join([f"{k.upper()}: {v:.4f}" for k, v in train_metrics.items()]))
+        print("  Validation - " + " | ".join([f"{k.upper()}: {v:.4f}" for k, v in val_metrics.items()]))
+    
     # Final save
-    torch.save(model.state_dict(), f"{args.results_dir}/final_model.pth")
+    xm.save(model.state_dict(), f"{args.results_dir}/final_model.pth")
     torch.save(history, f"{args.results_dir}/training_history.pt")
     print(f"\nBest Validation RMSE: {best_val_rmse:.4f}")
 
