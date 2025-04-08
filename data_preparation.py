@@ -5,7 +5,6 @@ import scipy.sparse
 from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer
 from scipy.interpolate import interp1d
-import random
 
 class GambiaDataProcessor:
     def __init__(self, data_path):
@@ -24,6 +23,7 @@ class GambiaDataProcessor:
         """Process and normalize all input data"""
         print("\n=== Loading and Processing Raw Data ===")
         
+        # Load raw data (all shapes: [287, 41, 84])
         ndvi = self.data['NDVI']
         soil = self.data['SoilMoisture']
         spi = self.data['SPI']
@@ -39,19 +39,19 @@ class GambiaDataProcessor:
         self.valid_pixels = np.where(valid_mask)
         num_nodes = len(self.valid_pixels[0])
 
-        # Initialize arrays
+        # Initialize arrays - now 3D: [time, nodes, features]
         features = np.zeros((287, num_nodes, 3), dtype=np.float32)
         targets = np.zeros((287, num_nodes), dtype=np.float32)
 
         # Extract valid pixels
         y_idx, x_idx = self.valid_pixels
         for t in range(287):
-            features[t, :, 0] = ndvi[t, y_idx, x_idx]
-            features[t, :, 1] = soil[t, y_idx, x_idx]
-            features[t, :, 2] = lst[t, y_idx, x_idx]
-            targets[t, :] = spi[t, y_idx, x_idx]
+            features[t, :, 0] = ndvi[t, y_idx, x_idx]  # NDVI
+            features[t, :, 1] = soil[t, y_idx, x_idx]  # Soil
+            features[t, :, 2] = lst[t, y_idx, x_idx]   # LST
+            targets[t, :] = spi[t, y_idx, x_idx]       # SPI
 
-        # LST interpolation
+        # Interpolate missing LST values
         for node in range(num_nodes):
             lst_series = features[:, node, 2]
             valid_mask = ~np.isnan(lst_series)
@@ -66,48 +66,51 @@ class GambiaDataProcessor:
             else:
                 features[:, node, 2] = np.nan_to_num(lst_series, nan=np.nanmean(lst_series))
 
-        # Normalizations
+        # Apply normalizations
         features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, num_nodes)
         features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, num_nodes)
         features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, num_nodes)
         targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, num_nodes)
 
-        # Adjacency matrix
+        # Create adjacency matrix
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
         self.adj_matrix = (distances <= 10).astype(float)
         np.fill_diagonal(self.adj_matrix, 0)
         self.adj_matrix = scipy.sparse.csr_matrix(self.adj_matrix)
 
-        return features, targets
+        return features, targets  # Now returning 3D features array
 
 class GambiaDroughtDataset(Dataset):
     def __init__(self, features, targets, valid_pixels, seq_len=12):
-        y_idx, x_idx = valid_pixels
-        self.features = features[:, y_idx, x_idx, :]
-        self.targets = targets[:, y_idx, x_idx]
+        # features shape: [time, nodes, features]
+        # targets shape: [time, nodes]
+        self.features = features  # Already contains only valid pixels
+        self.targets = targets
         self.seq_len = seq_len
         self.training = False
         
-        # Generate indices
-        self.valid_indices = []
-        num_pixels = len(valid_pixels[0])
+        # Generate valid indices (time_idx,)
         max_time = features.shape[0] - seq_len
+        self.valid_indices = list(range(max_time))
         
-        for pixel_idx in tqdm(range(num_pixels), desc="Generating sequences"):
-            for time_idx in range(max_time):
-                self.valid_indices.append((pixel_idx, time_idx))
-        
-        self.valid_indices.sort(key=lambda x: x[1])
+        print(f"\nCreated {len(self)} samples with sequence length {seq_len}")
 
     def __getitem__(self, idx):
-        start_idx = max(0, idx - self.seq_len)
-        x_seq = self.features[start_idx:idx]
+        """Returns:
+           x: [seq_len, num_nodes, features]
+           y: [num_nodes]
+        """
+        start_idx = max(0, idx)
+        end_idx = start_idx + self.seq_len
+        x_seq = self.features[start_idx:end_idx]
         
+        # Pad if sequence is too short
         if len(x_seq) < self.seq_len:
             padding = np.zeros((self.seq_len - len(x_seq), *x_seq.shape[1:]), dtype=np.float32)
             x_seq = np.concatenate([padding, x_seq])
         
+        # Apply random masking augmentation
         if self.training:
             mask = np.random.rand(*x_seq.shape) < 0.1
             x_seq[mask] = 0
@@ -115,11 +118,4 @@ class GambiaDroughtDataset(Dataset):
         return torch.tensor(x_seq, dtype=torch.float16), torch.tensor(self.targets[idx], dtype=torch.float16)
 
     def __len__(self):
-        return len(self.features) - self.seq_len
-
-if __name__ == "__main__":
-    processor = GambiaDataProcessor("/kaggle/input/gambia-data.npz")
-    features, targets = processor.process_data()
-    dataset = GambiaDroughtDataset(features, targets, processor.valid_pixels)
-    sample_x, sample_y = dataset[0]
-    print(f"\nSample shapes - X: {sample_x.shape}, y: {sample_y.shape}")
+        return len(self.valid_indices)
