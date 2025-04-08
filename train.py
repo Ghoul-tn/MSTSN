@@ -213,7 +213,7 @@ def main():
                     if i % 2 == 0:  # Checkpoint every other batch
                         pred = checkpoint(checkpoint_forward, x)
                     else:
-                    pred = model(x)
+                        pred = model(x)
                     print(f"Pred shape: {pred.shape}, Target shape: {y.shape}")
                     assert pred.shape == y.shape, "Shape mismatch!"
                     loss = loss_fn(pred, y)
