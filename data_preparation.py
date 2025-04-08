@@ -24,46 +24,38 @@ class GambiaDataProcessor:
         """Process and normalize all input data"""
         print("\n=== Loading and Processing Raw Data ===")
         
-        # Load raw data
-        ndvi = self.data['NDVI']          # (287, 41, 84)
-        soil = self.data['SoilMoisture']  # (287, 41, 84)
-        spi = self.data['SPI']            # (287, 41, 84)
-        lst = self.data['LST']            # (287, 41, 84)
+        ndvi = self.data['NDVI']
+        soil = self.data['SoilMoisture']
+        spi = self.data['SPI']
+        lst = self.data['LST']
 
-        print(f"Original shapes - NDVI: {ndvi.shape}, Soil: {soil.shape}, "
-              f"SPI: {spi.shape}, LST: {lst.shape}")
-
-        # Create strict valid pixel mask
-        print("\nCreating valid pixel mask...")
+        # Create valid pixel mask
         valid_mask = (
             (~np.isnan(ndvi).all(axis=0)) & 
             (~np.isnan(soil).all(axis=0)) & 
-            (~np.isnan(spi).all(axis=0))& 
+            (~np.isnan(spi).all(axis=0)) & 
             (~np.isnan(lst).all(axis=0))
         )
         self.valid_pixels = np.where(valid_mask)
         num_nodes = len(self.valid_pixels[0])
-        print(f"Using {num_nodes} valid pixels (based on complete data availability)")
 
-        # Initialize arrays for valid data
-        features = np.zeros((287, num_nodes, 3))  # (time, nodes, features)
-        targets = np.zeros((287, num_nodes))      # (time, nodes)
+        # Initialize arrays
+        features = np.zeros((287, num_nodes, 3), dtype=np.float32)
+        targets = np.zeros((287, num_nodes), dtype=np.float32)
 
         # Extract valid pixels
-        print("\nExtracting valid pixels...")
         y_idx, x_idx = self.valid_pixels
         for t in range(287):
-            features[t, :, 0] = ndvi[t, y_idx, x_idx]  # NDVI
-            features[t, :, 1] = soil[t, y_idx, x_idx]  # Soil
-            features[t, :, 2] = lst[t, y_idx, x_idx]   # LST
-            targets[t, :] = spi[t, y_idx, x_idx]       # SPI
+            features[t, :, 0] = ndvi[t, y_idx, x_idx]
+            features[t, :, 1] = soil[t, y_idx, x_idx]
+            features[t, :, 2] = lst[t, y_idx, x_idx]
+            targets[t, :] = spi[t, y_idx, x_idx]
 
-        # Handle LST NaNs with interpolation
-        print("\nInterpolating missing LST values...")
+        # LST interpolation
         for node in range(num_nodes):
             lst_series = features[:, node, 2]
             valid_mask = ~np.isnan(lst_series)
-            if np.sum(valid_mask) > 1:
+            if valid_mask.sum() > 1:
                 interp_func = interp1d(
                     np.arange(287)[valid_mask],
                     lst_series[valid_mask],
@@ -74,115 +66,60 @@ class GambiaDataProcessor:
             else:
                 features[:, node, 2] = np.nan_to_num(lst_series, nan=np.nanmean(lst_series))
 
-        # Apply expert normalizations
-        print("\nApplying feature-specific normalizations:")
-        # NDVI - MinMax
-        features[:, :, 0] = self.scalers['ndvi'].fit_transform(
-            features[:, :, 0].reshape(-1, 1)
-        ).reshape(287, num_nodes)
-        print("- NDVI: MinMax [0,1] applied")
-        
-        # Soil - Standard
-        features[:, :, 1] = self.scalers['soil'].fit_transform(
-            features[:, :, 1].reshape(-1, 1)
-        ).reshape(287, num_nodes)
-        print("- Soil Moisture: StandardScaler applied")
-        
-        # LST - Standard
-        features[:, :, 2] = self.scalers['lst'].fit_transform(
-            features[:, :, 2].reshape(-1, 1)
-        ).reshape(287, num_nodes)
-        print("- LST: StandardScaler applied")
-        
-        # SPI - Quantile
-        targets = self.scalers['spi'].fit_transform(
-            targets.reshape(-1, 1)
-        ).reshape(287, num_nodes)
-        print("- SPI: QuantileTransformer (Gaussian) applied")
+        # Normalizations
+        features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, num_nodes)
+        features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, num_nodes)
+        features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, num_nodes)
+        targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, num_nodes)
 
-        # Create adjacency matrix
-        print("\nBuilding adjacency matrix ...")
+        # Adjacency matrix
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
         self.adj_matrix = (distances <= 10).astype(float)
         np.fill_diagonal(self.adj_matrix, 0)
         self.adj_matrix = scipy.sparse.csr_matrix(self.adj_matrix)
 
-        # Reshape for MSTSN (time, height, width, channels)
-        print("\nReshaping for MSTSN architecture...")
-        feature_grid = np.full((287, 41, 84, 3), np.nan)
-        target_grid = np.full((287, 41, 84), np.nan)
-        
-        for t in range(287):
-            feature_grid[t, y_idx, x_idx, :] = features[t]
-            target_grid[t, y_idx, x_idx] = targets[t]
-
-        print("\nFinal processed shapes:")
-        print(f"- Features: {feature_grid.shape} (time, height, width, channels)")
-        print(f"- Targets: {target_grid.shape} (time, height, width)")
-        print(f"- Adjacency matrix: {self.adj_matrix.shape} (sparsity: {100*(1-self.adj_matrix.nnz/(num_nodes*num_nodes)):.2f}%)")
-        
-        return feature_grid, target_grid
+        return features, targets
 
 class GambiaDroughtDataset(Dataset):
     def __init__(self, features, targets, valid_pixels, seq_len=12):
-        # Validate inputs
-        assert len(valid_pixels) == 2, "valid_pixels must be (y_indices, x_indices) tuple"
-        assert features.shape[:3] == targets.shape, "Feature/target spatial dimensions mismatch"
         y_idx, x_idx = valid_pixels
-        self.features = features[:, y_idx, x_idx, :]  # [time, 2139, 3]
-        self.targets = targets[:, y_idx, x_idx]       # [time, 2139]
-        self.valid_pixels = valid_pixels
+        self.features = features[:, y_idx, x_idx, :]
+        self.targets = targets[:, y_idx, x_idx]
         self.seq_len = seq_len
         self.training = False
-        # Generate valid indices (pixel_idx, time_idx)
+        
+        # Generate indices
         self.valid_indices = []
         num_pixels = len(valid_pixels[0])
         max_time = features.shape[0] - seq_len
         
-        print(f"\nGenerating {seq_len}-month sequences for {num_pixels} pixels...")
-        for pixel_idx in tqdm(range(num_pixels)):
+        for pixel_idx in tqdm(range(num_pixels), desc="Generating sequences"):
             for time_idx in range(max_time):
                 self.valid_indices.append((pixel_idx, time_idx))
         
-        # Sort by time_idx to maintain temporal order
         self.valid_indices.sort(key=lambda x: x[1])
-        print(f"Created {len(self)} total samples ({num_pixels} pixels × {max_time} time steps)")
-
-
 
     def __getitem__(self, idx):
-        """Returns:
-           x: [seq_len, num_nodes, features]
-           y: [num_nodes]
-        """
-        # Ensure we don't go out of bounds
         start_idx = max(0, idx - self.seq_len)
-        
-        # Get sequence with consistent length
         x_seq = self.features[start_idx:idx]
         
-        # Pad if sequence is shorter than seq_len
         if len(x_seq) < self.seq_len:
-            padding = np.zeros((self.seq_len - len(x_seq), *x_seq.shape[1:]))
+            padding = np.zeros((self.seq_len - len(x_seq), *x_seq.shape[1:]), dtype=np.float32)
             x_seq = np.concatenate([padding, x_seq])
         
-        # Apply random masking augmentation
-        if self.training:  # Only augment during training
+        if self.training:
             mask = np.random.rand(*x_seq.shape) < 0.1
             x_seq[mask] = 0
         
-        return torch.FloatTensor(x_seq), torch.FloatTensor(self.targets[idx])
+        return torch.tensor(x_seq, dtype=torch.float16), torch.tensor(self.targets[idx], dtype=torch.float16)
 
     def __len__(self):
         return len(self.features) - self.seq_len
 
 if __name__ == "__main__":
-    # Test data processing
     processor = GambiaDataProcessor("/kaggle/input/gambia-data.npz")
     features, targets = processor.process_data()
-    
-    # Test dataset
     dataset = GambiaDroughtDataset(features, targets, processor.valid_pixels)
     sample_x, sample_y = dataset[0]
     print(f"\nSample shapes - X: {sample_x.shape}, y: {sample_y.shape}")
