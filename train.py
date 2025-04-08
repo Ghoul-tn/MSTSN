@@ -146,19 +146,22 @@ def main():
         train_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=0,  # Reduced from 2 to 0 for TPU stability
         collate_fn=collate_fn,
         pin_memory=True,
-        drop_last=True  # Required for TPU
+        drop_last=True,
+        persistent_workers=False  # Add this
     )
+    
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=0,  # Reduced from 2 to 0
         collate_fn=collate_fn,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        persistent_workers=False
     )
     
     # Wrap with TPU parallel loader
@@ -198,12 +201,12 @@ def main():
                 
                 optimizer.zero_grad()
                 
-                with autocast():  # Mixed precision
+                with autocast(device_type='xla'):  # Fixed here
                     pred = model(x)
                     loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
+                xm.optimizer_step(optimizer)  # Changed here
                 scaler.update()
                 
                 train_loss += loss.item() * x.size(0)
