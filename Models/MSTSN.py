@@ -18,7 +18,7 @@ class CrossAttention(nn.Module):
 class EnhancedMSTSN(nn.Module):
     def __init__(self, num_nodes):
         super().__init__()
-        # Spatial dims: 3 -> 64 -> 128 (no dimension conflicts)
+        # Now guaranteed to output 128-dim features
         self.spatial_processor = SpatialProcessor(
             num_nodes=num_nodes,
             in_dim=3,
@@ -26,14 +26,12 @@ class EnhancedMSTSN(nn.Module):
             out_dim=128  # Must match temporal_processor input_dim
         )
         
-        # Temporal processor expects 128-dim inputs
         self.temporal_processor = TemporalTransformer(
-            input_dim=128,  # Must match spatial_processor out_dim
+            input_dim=128,  # Matches spatial_processor out_dim
             num_heads=2,
             ff_dim=256,
             num_layers=2
         )
-        
         # Cross-attention dims
         self.cross_attn = CrossAttention(embed_dim=128, num_heads=2)
         
@@ -45,21 +43,23 @@ class EnhancedMSTSN(nn.Module):
             nn.Linear(64, 1)
         )
 
-    def forward(self, x):
+   def forward(self, x):
         batch_size, seq_len, num_nodes, _ = x.shape
         
-        # Spatial Processing
+        # Spatial Processing (now outputs [batch, nodes, 128])
         spatial_out = []
         for t in range(seq_len):
-            x_t = x[:, t, :, :]  # [batch, nodes, 3]
+            x_t = x[:, t, :, :]
             x_t = self.spatial_processor(x_t)  # [batch, nodes, 128]
             spatial_out.append(x_t.unsqueeze(1))
         spatial_out = torch.cat(spatial_out, dim=1)  # [batch, seq_len, nodes, 128]
-        print(f"Spatial out: {spatial_out.shape}")  # Should be [batch, seq_len, nodes, 128]
+        
+        # Reshape checks
+        assert spatial_out.size(-1) == 128, f"Expected 128 features, got {spatial_out.size(-1)}"
+        
         # Temporal Processing
-        temporal_in = spatial_out.reshape(batch_size * num_nodes, seq_len, 128)
-        print(f"Temporal in: {temporal_in.shape}")  # Should be [batch*nodes, seq_len, 128]
-        temporal_out = self.temporal_processor(temporal_in)  # [batch*nodes, seq_len, 128]
+        temporal_in = spatial_out.reshape(-1, seq_len, 128)  # [batch*nodes, seq_len, 128]
+        temporal_out = self.temporal_processor(temporal_in)
         
         # Cross-Attention
         spatial_feats = spatial_out.reshape(batch_size, -1, 128)
