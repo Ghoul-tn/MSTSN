@@ -39,6 +39,9 @@ class EnhancedMSTSN(nn.Module):
             nn.GELU(),
             nn.Linear(32, 1)
         )
+        # Enable gradient checkpointing
+        self.spatial_processor.checkpoint = True
+        self.temporal_processor.checkpoint = True
         # Convert all parameters to bfloat16
         for param in self.parameters():
             param.data = param.data.to(torch.bfloat16)
