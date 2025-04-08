@@ -15,10 +15,8 @@ from Models.MSTSN import EnhancedMSTSN
 
 # os.environ['XLA_USE_BF16'] = '1'  # Use bfloat16 where possible
 os.environ['XLA_TENSOR_ALLOCATOR_MAX_BYTES'] = '3221225472'  # 3GB buffer
- # Manual gradient checkpointing implementation
-def checkpoint_forward(x):
-     with torch.no_grad():
-         return model(x)
+
+
 class EarlyStopper:
     def __init__(self, patience=15, min_delta=0.005):
         self.patience = patience
@@ -180,7 +178,20 @@ def main():
     # Model initialization
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
     model = model.to(torch.bfloat16) # Direct bfloat16 conversion
-
+    print(f"Model memory: {sum(p.numel() * p.element_size() for p in model.parameters()) / 1e6}MB")
+    print(f"Input dtype: {next(model.parameters()).dtype}")  # Should show torch.bfloat16
+    # Define checkpoint function
+    def checkpoint_forward(x):
+        def create_custom_forward(module):
+            def custom_forward(*inputs):
+                return module(inputs[0])
+            return custom_forward
+        
+        # Checkpoint each major component separately
+        x = checkpoint(create_custom_forward(model.spatial_processor), x)
+        x = x.reshape(-1, args.seq_len, x.size(-1))  # Reshape for temporal
+        x = checkpoint(create_custom_forward(model.temporal_processor), x)
+        return x
     # Optimizer - Using AdamW instead of Adafactor for stability
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -211,14 +222,28 @@ def main():
                 
                 optimizer.zero_grad()
                 
-                with autocast(xm.xla_device()):  # Fixed here
-                    if i % 2 == 0:  # Checkpoint every other batch
-                        pred = checkpoint(checkpoint_forward, x)
-                    else:
-                        pred = model(x)
-                    print(f"Pred shape: {pred.shape}, Target shape: {y.shape}")
-                    assert pred.shape == y.shape, "Shape mismatch!"
-                    loss = loss_fn(pred, y)
+            with autocast(xm.xla_device()):
+                if i % 2 == 0:  # Apply checkpointing every other batch
+                    # Only checkpoint spatial and temporal processors
+                    spatial_out = []
+                    for t in range(x.size(1)):  # seq_len
+                        x_t = x[:, t, :, :]
+                        x_t = checkpoint(create_custom_forward(model.spatial_processor), x_t)
+                        spatial_out.append(x_t.unsqueeze(1))
+                    spatial_out = torch.cat(spatial_out, dim=1)
+                    
+                    temporal_in = spatial_out.reshape(-1, args.seq_len, spatial_out.size(-1))
+                    temporal_out = checkpoint(create_custom_forward(model.temporal_processor), temporal_in)
+                    
+                    # Rest of forward pass normally
+                    spatial_feats = spatial_out.reshape(x.size(0), -1, spatial_out.size(-1))
+                    temporal_feats = temporal_out.reshape(x.size(0), -1, temporal_out.size(-1))
+                    fused = model.cross_attn(spatial_feats, temporal_feats)
+                    pred = model.regressor(fused.mean(dim=1)).squeeze(-1)
+                else:
+                    pred = model(x)
+                
+                loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
                 if (i + 1) % grad_accum_steps == 0:
