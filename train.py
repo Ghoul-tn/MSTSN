@@ -182,7 +182,7 @@ def main():
     
         
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
-    scaler = GradScaler()
+    scaler = GradScaler('xla')
 
     # Training loop
     best_val_rmse = float('inf')
@@ -201,7 +201,7 @@ def main():
                 
                 optimizer.zero_grad()
                 
-                with autocast(device_type='xla'):  # Fixed here
+                with autocast():  # Fixed here
                     pred = model(x)
                     loss = loss_fn(pred, y)
                 
