@@ -204,7 +204,8 @@ def main():
         train_targets = []
         optimizer.zero_grad()
         with tqdm(train_loader, unit="batch") as tepoch:
-            for i, (x, y) in tepoch:
+            for i, (x, y) in enumerate(train_loader):
+                x, y = x.to(device), y.to(device)
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
                 
                 optimizer.zero_grad()
