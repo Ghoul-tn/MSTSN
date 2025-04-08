@@ -13,6 +13,8 @@ from torch_xla.amp import autocast, GradScaler
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
 from Models.MSTSN import EnhancedMSTSN
 
+os.environ['XLA_USE_BF16'] = '1'  # Use bfloat16 where possible
+os.environ['XLA_TENSOR_ALLOCATOR_MAX_BYTES'] = '3221225472'  # 3GB buffer
 class EarlyStopper:
     def __init__(self, patience=15, min_delta=0.005):
         self.patience = patience
@@ -36,13 +38,15 @@ class ImprovedDroughtLoss(nn.Module):
         self.gamma = gamma
 
     def forward(self, pred, target):
+        # Ensure shapes match [batch, nodes]
+        assert pred.shape == target.shape, f"Shapes must match: pred {pred.shape} vs target {target.shape}"
+        
         base = self.base_loss(pred, target)
         drought_mask = (target < -0.5).float()
         error = torch.abs(pred - target)
         focal_weight = (1 - torch.exp(-error)) ** self.gamma
         drought_err = focal_weight * error * drought_mask
         return base + self.alpha * torch.mean(drought_err)
-
 class DroughtMetrics:
     @staticmethod
     def calculate(y_true, y_pred):
@@ -117,7 +121,8 @@ def main():
     # TPU Setup
     device = xm.xla_device()
     early_stopper = EarlyStopper()
-
+    # Force FP16 across all operations
+    torch.set_float32_matmul_precision('medium')  # For TPU efficiency
     # Data loading
     processor = GambiaDataProcessor(args.data_path)
     features, targets = processor.process_data()
@@ -171,7 +176,9 @@ def main():
     # Model initialization
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
 
-
+    # Gradient checkpointing
+    model.gradient_checkpointing_enable()
+    
     # Optimizer - Using AdamW instead of Adafactor for stability
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -187,14 +194,14 @@ def main():
     # Training loop
     best_val_rmse = float('inf')
     history = {'train': [], 'val': []}
-    
+    grad_accum_steps = 4
     print("\n=== Starting TPU Training ===")
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0.0
         train_preds = []
         train_targets = []
-        
+        optimizer.zero_grad()
         with tqdm(train_loader, unit="batch") as tepoch:
             for x, y in tepoch:
                 tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
@@ -203,12 +210,16 @@ def main():
                 
                 with autocast(xm.xla_device()):  # Fixed here
                     pred = model(x)
+                    print(f"Pred shape: {pred.shape}, Target shape: {y.shape}")
+                    assert pred.shape == y.shape, "Shape mismatch!"
                     loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
-                xm.optimizer_step(optimizer)  # Changed here
+                if (i + 1) % grad_accum_steps == 0:
+                    xm.optimizer_step(optimizer)
+                    optimizer.zero_grad()
                 scaler.update()
-                
+                    
                 train_loss += loss.item() * x.size(0)
                 train_preds.append(pred.detach().cpu().numpy())
                 train_targets.append(y.detach().cpu().numpy())
