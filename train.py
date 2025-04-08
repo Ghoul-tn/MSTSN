@@ -170,11 +170,12 @@ def main():
 
 
     # Adafactor optimizer (memory-efficient for TPU)
-    optimizer = torch.optim.Adafactor(
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
         weight_decay=args.weight_decay
     )
+
     
         
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
@@ -202,7 +203,7 @@ def main():
                     loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
-                xm.optimizer_step(optimizer)
+                scaler.step(optimizer)
                 scaler.update()
                 
                 train_loss += loss.item() * x.size(0)
