@@ -169,7 +169,7 @@ def main():
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
 
 
-    # Adafactor optimizer (memory-efficient for TPU)
+    # Optimizer - Using AdamW instead of Adafactor for stability
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
