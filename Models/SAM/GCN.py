@@ -18,17 +18,21 @@ class AdaptiveAdjacency(nn.Module):
 class BatchedGAT(nn.Module):
     def __init__(self, in_dim, out_dim, heads=4):
         super().__init__()
-        self.gat = GATv2Conv(in_dim, out_dim // heads, heads=heads, concat=True)  # Ensure output is out_dim
-        self.norm = nn.LayerNorm(out_dim)
+        self.heads = heads
+        self.per_head_dim = out_dim // heads
+        self.gat = GATv2Conv(in_dim, self.per_head_dim, heads=heads, concat=True)
         
     def forward(self, x, adj):
-        batch_size, num_nodes, _ = x.shape
-        outputs = []
+        # Manual memory-efficient batching
+        batch_size = x.size(0)
+        outputs = torch.zeros(batch_size, x.size(1), self.per_head_dim * self.heads, 
+                            device=x.device, dtype=torch.float16)  # FP16
+        
         for b in range(batch_size):
             edge_index = adj[b].nonzero(as_tuple=False).t()
-            out = self.gat(x[b], edge_index)
-            outputs.append(out)
-        return self.norm(torch.stack(outputs))
+            outputs[b] = self.gat(x[b].float(), edge_index)  # Explicit float32->float16
+            
+        return outputs
 
 class SpatialProcessor(nn.Module):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
