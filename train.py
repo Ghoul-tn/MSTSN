@@ -167,7 +167,7 @@ def main():
 
     # Model initialization
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
-    model = xmp.MpModelWrapper(model)  # For multi-core TPU
+    model = xm.MpModelWrapper(model)  # For multi-core TPU
 
     # Adafactor optimizer (memory-efficient for TPU)
     optimizer = torch.optim.Adafactor(
