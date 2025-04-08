@@ -173,10 +173,9 @@ def main():
     optimizer = torch.optim.Adafactor(
         model.parameters(),
         lr=args.lr,
-        weight_decay=args.weight_decay,
-        scale_parameter=False,  # Disable automatic learning rate scaling
-        warmup_init=False      # Disable warmup initialization
+        weight_decay=args.weight_decay
     )
+    
         
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
     scaler = GradScaler()
