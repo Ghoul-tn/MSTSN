@@ -20,6 +20,7 @@ class BatchedGAT(nn.Module):
         super().__init__()
         self.gat = GATv2Conv(in_dim, out_dim, heads=heads, concat=True)
         self.norm = nn.LayerNorm(out_dim * heads)
+        self._use_checkpoint = False  # Disable checkpointing for XLA
 
     def _forward_impl(self, x, adj):
         batch_size, num_nodes, _ = x.shape
@@ -30,7 +31,9 @@ class BatchedGAT(nn.Module):
         return self.norm(torch.stack(outputs))
 
     def forward(self, x, adj):
-        return checkpoint(self._forward_impl, x, adj)  # Gradient checkpointing
+        if self._use_checkpoint and not x.is_xla:  # Only checkpoint on non-XLA devices
+            return checkpoint(self._forward_impl, x, adj)
+        return self._forward_impl(x, adj)
 
 class SpatialProcessor(nn.Module):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
