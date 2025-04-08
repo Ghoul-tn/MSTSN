@@ -115,7 +115,10 @@ class GambiaDroughtDataset(Dataset):
             mask = np.random.rand(*x_seq.shape) < 0.1
             x_seq[mask] = 0
         
-        return torch.tensor(x_seq, dtype=torch.float16), torch.tensor(self.targets[idx], dtype=torch.float16)
+        return (
+            torch.tensor(x_seq, dtype=torch.float16),  # FP16 storage
+            torch.tensor(self.targets[idx], dtype=torch.float16)
+        )
 
     def __len__(self):
         return len(self.valid_indices)
