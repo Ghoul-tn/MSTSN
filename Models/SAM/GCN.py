@@ -18,33 +18,28 @@ class AdaptiveAdjacency(nn.Module):
 class BatchedGAT(nn.Module):
     def __init__(self, in_dim, out_dim, heads=4):
         super().__init__()
-        self.gat = GATv2Conv(in_dim, out_dim, heads=heads, concat=True)
-        self.norm = nn.LayerNorm(out_dim * heads)
-        self._use_checkpoint = False  # Disable checkpointing for XLA
-
+        self.gat = GATv2Conv(in_dim, out_dim // heads, heads=heads, concat=True)  # Ensure output is out_dim
+        self.norm = nn.LayerNorm(out_dim)
+        
     def _forward_impl(self, x, adj):
         batch_size, num_nodes, _ = x.shape
         outputs = []
         for b in range(batch_size):
             edge_index = adj[b].nonzero(as_tuple=False).t()
-            outputs.append(self.gat(x[b], edge_index))
+            out = self.gat(x[b], edge_index)
+            outputs.append(out)
         return self.norm(torch.stack(outputs))
-
-    def forward(self, x, adj):
-        if self._use_checkpoint and not x.is_xla:  # Only checkpoint on non-XLA devices
-            return checkpoint(self._forward_impl, x, adj)
-        return self._forward_impl(x, adj)
 
 class SpatialProcessor(nn.Module):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
         super().__init__()
         self.adaptive_adj = AdaptiveAdjacency(num_nodes, hidden_dim)
-        self.gat1 = BatchedGAT(in_dim, hidden_dim)
-        self.gat2 = BatchedGAT(hidden_dim * 4, out_dim)
+        self.gat1 = BatchedGAT(in_dim, hidden_dim)  # Output: hidden_dim
+        self.gat2 = BatchedGAT(hidden_dim, out_dim)  # Output: out_dim (128)
         self.dropout = nn.Dropout(0.3)
 
     def forward(self, x):
         adj = self.adaptive_adj(x.size(0))
         x = F.relu(self.gat1(x, adj))
         x = self.dropout(x)
-        return self.gat2(x, adj)
+        return self.gat2(x, adj)  # Output will be exactly out_dim
