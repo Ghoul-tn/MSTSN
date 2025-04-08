@@ -50,6 +50,7 @@ class EnhancedMSTSN(nn.Module):
         
         # Temporal Processing
         temporal_in = spatial_out.reshape(batch_size * num_nodes, seq_len, -1)
+        print(f"Temporal input shape: {temporal_in.shape}")
         temporal_out = self.temporal_processor(temporal_in)
         
         # Cross-Attention
