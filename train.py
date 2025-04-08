@@ -15,6 +15,10 @@ from Models.MSTSN import EnhancedMSTSN
 
 # os.environ['XLA_USE_BF16'] = '1'  # Use bfloat16 where possible
 os.environ['XLA_TENSOR_ALLOCATOR_MAX_BYTES'] = '3221225472'  # 3GB buffer
+ # Manual gradient checkpointing implementation
+def checkpoint_forward(x):
+     with torch.no_grad():
+         return model(x)
 class EarlyStopper:
     def __init__(self, patience=15, min_delta=0.005):
         self.patience = patience
@@ -176,10 +180,7 @@ def main():
     # Model initialization
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
     model = model.to(torch.bfloat16) # Direct bfloat16 conversion
-    # Manual gradient checkpointing implementation
-    def checkpoint_forward(x):
-        with torch.no_grad():
-            return model(x)
+
     # Optimizer - Using AdamW instead of Adafactor for stability
     optimizer = torch.optim.AdamW(
         model.parameters(),
