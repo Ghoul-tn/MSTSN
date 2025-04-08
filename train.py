@@ -146,7 +146,7 @@ def main():
         train_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=8,
+        num_workers=2,
         collate_fn=collate_fn,
         pin_memory=True,
         drop_last=True  # Required for TPU
@@ -155,7 +155,7 @@ def main():
         val_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=8,
+        num_workers=2,
         collate_fn=collate_fn,
         pin_memory=True,
         drop_last=True
