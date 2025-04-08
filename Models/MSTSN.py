@@ -18,29 +18,27 @@ class CrossAttention(nn.Module):
 class EnhancedMSTSN(nn.Module):
     def __init__(self, num_nodes):
         super().__init__()
-        # Now guaranteed to output 128-dim features
+        # Reduced dimensions
         self.spatial_processor = SpatialProcessor(
             num_nodes=num_nodes,
             in_dim=3,
-            hidden_dim=64,
-            out_dim=128  # Must match temporal_processor input_dim
+            hidden_dim=32,  # Reduced from 64
+            out_dim=64  # Reduced from 128
         )
         
         self.temporal_processor = TemporalTransformer(
-            input_dim=128,  # Matches spatial_processor out_dim
+            input_dim=64,  # Matches reduced spatial output
             num_heads=2,
-            ff_dim=256,
-            num_layers=2
+            ff_dim=128,  # Reduced from 256
+            num_layers=1  # Reduced from 2
         )
-        # Cross-attention dims
-        self.cross_attn = CrossAttention(embed_dim=128, num_heads=2)
         
-        # Regressor (no dimension changes)
+        # Smaller regressor
         self.regressor = nn.Sequential(
-            nn.Linear(128, 64),
+            nn.Linear(64, 32),
             nn.GELU(),
             nn.Dropout(0.3),
-            nn.Linear(64, 1)
+            nn.Linear(32, 1)
         )
 
     def forward(self, x):
