@@ -203,7 +203,7 @@ def main():
                 
                 with autocast(xm.xla_device()):  # Fixed here
                     pred = model(x)
-                    loss = loss_fn(pred, y.view_as(pred))
+                    loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
                 xm.optimizer_step(optimizer)  # Changed here
