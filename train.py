@@ -201,7 +201,7 @@ def main():
                 
                 optimizer.zero_grad()
                 
-                with autocast():  # Fixed here
+                with autocast(xm.xla_device())  # Fixed here
                     pred = model(x)
                     loss = loss_fn(pred, y)
                 
