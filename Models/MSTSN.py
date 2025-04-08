@@ -37,11 +37,14 @@ class EnhancedMSTSN(nn.Module):
         self.regressor = nn.Sequential(
             nn.Linear(64, 32),
             nn.GELU(),
-            nn.Dropout(0.3),
             nn.Linear(32, 1)
         )
+        # Convert all parameters to bfloat16
+        for param in self.parameters():
+            param.data = param.data.to(torch.bfloat16)
 
     def forward(self, x):
+        x = x.to(torch.bfloat16)
         batch_size, seq_len, num_nodes, _ = x.shape
         
         # Spatial Processing (now outputs [batch, nodes, 128])
