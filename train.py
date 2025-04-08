@@ -146,7 +146,7 @@ def main():
         train_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0,  # Reduced from 2 to 0 for TPU stability
+        num_workers=8,  # Reduced from 2 to 0 for TPU stability
         collate_fn=collate_fn,
         pin_memory=True,
         drop_last=True,
@@ -157,7 +157,7 @@ def main():
         val_set,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0,  # Reduced from 2 to 0
+        num_workers=8,  # Reduced from 2 to 0
         collate_fn=collate_fn,
         pin_memory=True,
         drop_last=True,
