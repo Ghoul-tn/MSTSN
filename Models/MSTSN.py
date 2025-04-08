@@ -43,7 +43,7 @@ class EnhancedMSTSN(nn.Module):
             nn.Linear(64, 1)
         )
 
-   def forward(self, x):
+    def forward(self, x):
         batch_size, seq_len, num_nodes, _ = x.shape
         
         # Spatial Processing (now outputs [batch, nodes, 128])
