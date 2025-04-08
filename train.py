@@ -174,9 +174,10 @@ def main():
         model.parameters(),
         lr=args.lr,
         weight_decay=args.weight_decay,
-        relative_step=False
+        scale_parameter=False,  # Disable automatic learning rate scaling
+        warmup_init=False      # Disable warmup initialization
     )
-    
+        
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
     scaler = GradScaler()
 
