@@ -219,12 +219,12 @@ def main():
                 loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
-                xm.mark_step()
+                
                 if (i + 1) % grad_accum_steps == 0:
                     xm.optimizer_step(optimizer)
                     optimizer.zero_grad()
                     scaler.update()
-                    
+                    xm.mark_step()
                 train_loss += loss.item() * x.size(0)
                 train_preds.append(pred.detach().cpu().numpy())
                 train_targets.append(y.detach().cpu().numpy())
