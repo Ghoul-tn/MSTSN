@@ -34,7 +34,7 @@ class EnhancedMSTSN(nn.Module):
             num_layers=1  # Reduced from 2
         )
         # Cross-attention dims
-        self.cross_attn = CrossAttention(embed_dim=128, num_heads=2)
+        self.cross_attn = CrossAttention(embed_dim=64, num_heads=2)
         # Smaller regressor
         self.regressor = nn.Sequential(
             nn.Linear(64, 32),
