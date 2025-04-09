@@ -14,7 +14,7 @@ from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
 from Models.MSTSN import EnhancedMSTSN
 
 # os.environ['XLA_USE_BF16'] = '1'  # Force bfloat16
-os.environ['XLA_CACHE_SIZE'] = '2147483648'  # 2GB cache
+# os.environ['XLA_CACHE_SIZE'] = '2147483648'  # 2GB cache
 # os.environ['XLA_DISABLE_METRICS'] = '1'  # Reduce overhead
 
 
