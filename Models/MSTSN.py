@@ -23,23 +23,23 @@ class EnhancedMSTSN(nn.Module):
         self.spatial_processor = SpatialProcessor(
             num_nodes=num_nodes,
             in_dim=3,
-            hidden_dim=32,  # Reduced from 64
-            out_dim=64  # Reduced from 128
+            hidden_dim=16,  # Reduced from 64
+            out_dim=32  # Reduced from 128
         )
         
         self.temporal_processor = TemporalTransformer(
-            input_dim=64,  # Matches reduced spatial output
+            input_dim=32,  # Matches reduced spatial output
             num_heads=2,
-            ff_dim=128,  # Reduced from 256
+            ff_dim=64,  # Reduced from 256
             num_layers=1  # Reduced from 2
         )
         # Cross-attention dims
-        self.cross_attn = CrossAttention(embed_dim=64, num_heads=2)
+        self.cross_attn = CrossAttention(embed_dim=32, num_heads=2)
         # Smaller regressor
         self.regressor = nn.Sequential(
-            nn.Linear(64, 32),
+            nn.Linear(32, 16),
             nn.GELU(),
-            nn.Linear(32, 1)
+            nn.Linear(16, 1)
         )
 
         # Manual memory management
