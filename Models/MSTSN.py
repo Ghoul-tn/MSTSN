@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from Models.SAM.GCN import SpatialProcessor
 from Models.TEM.GRU import TemporalTransformer
 
