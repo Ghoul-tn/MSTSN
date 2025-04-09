@@ -67,33 +67,33 @@ class EnhancedMSTSN(nn.Module):
         xm.mark_step()
         return out
 
-def forward(self, x):
-    # Input: [batch, seq_len, nodes, features]
-    batch_size, seq_len, num_nodes, _ = x.shape
-    
-    # Spatial Processing (remove manual no_grad)
-    spatial_outputs = []
-    for t in range(seq_len):
-        x_t = x[:, t, :, :]
-        out = self.spatial_processor(x_t)  # Let autocast handle dtype
-        spatial_outputs.append(out.unsqueeze(1))
-    
-    spatial_out = torch.cat(spatial_outputs, dim=1)
-    
-    # Temporal Processing
-    temporal_in = spatial_out.reshape(-1, seq_len, 64)
-    temporal_out = self.temporal_processor(temporal_in)
-    
-    # Cross Attention
-    spatial_feats = spatial_out.reshape(batch_size, -1, 64)
-    temporal_feats = temporal_out.reshape(batch_size, -1, 64)
-    fused = self.cross_attn(spatial_feats, temporal_feats)
-    
-    # Reshape to maintain [batch, nodes, features]
-    fused = fused.view(batch_size, num_nodes, -1)
-    
-    # Apply regressor to each node individually
-    # Output should be [batch, nodes]
-    node_preds = self.regressor(fused).squeeze(-1)
-    
-    return node_preds
+    def forward(self, x):
+        # Input: [batch, seq_len, nodes, features]
+        batch_size, seq_len, num_nodes, _ = x.shape
+        
+        # Spatial Processing (remove manual no_grad)
+        spatial_outputs = []
+        for t in range(seq_len):
+            x_t = x[:, t, :, :]
+            out = self.spatial_processor(x_t)  # Let autocast handle dtype
+            spatial_outputs.append(out.unsqueeze(1))
+        
+        spatial_out = torch.cat(spatial_outputs, dim=1)
+        
+        # Temporal Processing
+        temporal_in = spatial_out.reshape(-1, seq_len, 64)
+        temporal_out = self.temporal_processor(temporal_in)
+        
+        # Cross Attention
+        spatial_feats = spatial_out.reshape(batch_size, -1, 64)
+        temporal_feats = temporal_out.reshape(batch_size, -1, 64)
+        fused = self.cross_attn(spatial_feats, temporal_feats)
+        
+        # Reshape to maintain [batch, nodes, features]
+        fused = fused.view(batch_size, num_nodes, -1)
+        
+        # Apply regressor to each node individually
+        # Output should be [batch, nodes]
+        node_preds = self.regressor(fused).squeeze(-1)
+        
+        return node_preds
