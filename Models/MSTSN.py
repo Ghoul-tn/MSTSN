@@ -43,44 +43,56 @@ class EnhancedMSTSN(nn.Module):
         # Convert all parameters to bfloat16
         for param in self.parameters():
             param.data = param.data.to(torch.bfloat16)
-        # XLA-specific checkpointing control
-        self.use_checkpoint = True
-        self.checkpoint_kwargs = {
-            'use_reentrant': False,
-            'preserve_rng_state': True
-        }
+        # Manual memory management
+        self._spatial_outputs = None
+        self._temporal_output = None
 
-    def _checkpointed_forward(self, module, *args):
-        """XLA-compatible checkpointing wrapper"""
-        if not self.use_checkpoint or not self.training:
-            return module(*args)
+    def _spatial_forward(self, x_t):
+        """Forward pass with manual memory management"""
+        # Clear previous outputs
+        if self._spatial_outputs is None:
+            self._spatial_outputs = []
         
-        # For TPU, we need to use xm.mark_step() with checkpointing
-        def custom_forward(*inputs):
-            output = module(*inputs)
-            xm.mark_step()  # Important for XLA
-            return output
-            
-        return checkpoint(custom_forward, *args, **self.checkpoint_kwargs)
+        # Forward pass with manual memory clearing
+        with torch.no_grad():
+            out = self.spatial_processor(x_t)
+        self._spatial_outputs.append(out.unsqueeze(1))
+        xm.mark_step()  # Important for XLA
+        return out
+
+    def _temporal_forward(self, x):
+        """Temporal forward with manual memory management"""
+        with torch.no_grad():
+            out = self.temporal_processor(x)
+        self._temporal_output = out
+        xm.mark_step()
+        return out
 
     def forward(self, x):
         batch_size, seq_len, num_nodes, _ = x.shape
         
         # Spatial Processing
-        spatial_out = []
+        self._spatial_outputs = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
-            processed = self._checkpointed_forward(self.spatial_processor, x_t)
-            spatial_out.append(processed.unsqueeze(1))
-        spatial_out = torch.cat(spatial_out, dim=1)
+            self._spatial_forward(x_t)
+        spatial_out = torch.cat(self._spatial_outputs, dim=1)
         
         # Temporal Processing
         temporal_in = spatial_out.reshape(-1, seq_len, 64)
-        temporal_out = self._checkpointed_forward(self.temporal_processor, temporal_in)
+        self._temporal_forward(temporal_in)
+        temporal_out = self._temporal_output
         
         # Cross Attention
         spatial_feats = spatial_out.reshape(batch_size, -1, 64)
         temporal_feats = temporal_out.reshape(batch_size, -1, 64)
         fused = self.cross_attn(spatial_feats, temporal_feats)
         
-        return self.regressor(fused.mean(dim=1)).squeeze(-1)
+        # Final prediction
+        output = self.regressor(fused.mean(dim=1)).squeeze(-1)
+        
+        # Clear intermediate values
+        self._spatial_outputs = None
+        self._temporal_output = None
+        
+        return output
