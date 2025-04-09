@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv
 from torch.utils.checkpoint import checkpoint
+import torch_xla.core.xla_model as xm
 
 class AdaptiveAdjacency(nn.Module):
     def __init__(self, num_nodes, hidden_dim):
@@ -23,17 +24,14 @@ class BatchedGAT(nn.Module):
         self.gat = GATv2Conv(in_dim, self.per_head_dim, heads=heads, concat=True)
         
     def forward(self, x, adj):
-        batch_size = x.size(0)
-        # Remove explicit dtype casting
-        outputs = torch.zeros(batch_size, x.size(1), self.per_head_dim * self.heads,
-                            device=x.device)  # Let XLA decide dtype
-        
-        for b in range(batch_size):
-            edge_index = adj[b].nonzero(as_tuple=False).t()
-            outputs[b] = self.gat(x[b], edge_index)  # No float() conversion
-            
-        return outputs
-
+        outputs = []
+        for b in range(x.size(0)):
+            edge_index = adj[b].nonzero().t()
+            out = self.gat(x[b], edge_index)
+            outputs.append(out)
+            del edge_index, out  # Critical for TPU memory
+            xm.mark_step()  # Force XLA execution
+        return torch.stack(outputs)
 class SpatialProcessor(nn.Module):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
         super().__init__()
