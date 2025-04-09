@@ -39,9 +39,8 @@ class EnhancedMSTSN(nn.Module):
             nn.GELU(),
             nn.Linear(32, 1)
         )
-        # Enable gradient checkpointing
-        self.spatial_processor.checkpoint = True
-        self.temporal_processor.checkpoint = True
+        # Add checkpointing flags
+        self.use_checkpoint = True  # Control checkpointing globally
         # Convert all parameters to bfloat16
         for param in self.parameters():
             param.data = param.data.to(torch.bfloat16)
@@ -50,26 +49,26 @@ class EnhancedMSTSN(nn.Module):
         x = x.to(torch.bfloat16)
         batch_size, seq_len, num_nodes, _ = x.shape
         
-        # Spatial Processing with checkpointing
+        # Spatial Processing
         spatial_out = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
-            if self.spatial_processor.checkpoint:
-                x_t = checkpoint(self.spatial_processor, x_t)
+            if self.use_checkpoint:
+                spatial_out.append(checkpoint(self.spatial_processor, x_t).unsqueeze(1))
             else:
-                x_t = self.spatial_processor(x_t)
-            spatial_out.append(x_t.unsqueeze(1))
+                spatial_out.append(self.spatial_processor(x_t).unsqueeze(1))
         spatial_out = torch.cat(spatial_out, dim=1)
         
-        # Temporal Processing with checkpointing
-        temporal_in = spatial_out.reshape(-1, seq_len, spatial_out.size(-1))
-        if self.temporal_processor.checkpoint:
+        # Temporal Processing
+        temporal_in = spatial_out.reshape(-1, seq_len, 64)
+        if self.use_checkpoint:
             temporal_out = checkpoint(self.temporal_processor, temporal_in)
         else:
             temporal_out = self.temporal_processor(temporal_in)
         
-        # Cross-Attention
-        spatial_feats = spatial_out.reshape(batch_size, -1, spatial_out.size(-1))
-        temporal_feats = temporal_out.reshape(batch_size, -1, temporal_out.size(-1))
+        # Cross Attention
+        spatial_feats = spatial_out.reshape(batch_size, -1, 64)
+        temporal_feats = temporal_out.reshape(batch_size, -1, 64)
         fused = self.cross_attn(spatial_feats, temporal_feats)
+        
         return self.regressor(fused.mean(dim=1)).squeeze(-1)
