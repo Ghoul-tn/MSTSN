@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
+import torch_xla.core.xla_model as xm
 from Models.SAM.GCN import SpatialProcessor
 from Models.TEM.GRU import TemporalTransformer
 
