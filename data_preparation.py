@@ -116,8 +116,8 @@ class GambiaDroughtDataset(Dataset):
             x_seq[mask] = 0
         
         return (
-            torch.tensor(x_seq, dtype=torch.float16),  # FP16 storage
-            torch.tensor(self.targets[idx], dtype=torch.float16)
+            torch.tensor(x_seq, dtype=torch.float32),  # XLA prefers float32 inputs
+            torch.tensor(self.targets[idx], dtype=torch.float32)
         )
 
     def __len__(self):
