@@ -190,7 +190,7 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay
     )
-    optimizer = xm.optimizers.AdamW(optimizer.param_groups)
+
     
         
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
