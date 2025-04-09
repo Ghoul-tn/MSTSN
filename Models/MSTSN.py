@@ -71,26 +71,30 @@ class EnhancedMSTSN(nn.Module):
         # Input: [batch, seq_len, nodes, features]
         batch_size, seq_len, num_nodes, _ = x.shape
         
-        # Spatial Processing (remove manual no_grad)
+        # Spatial Processing
         spatial_outputs = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
-            out = self.spatial_processor(x_t)  # Let autocast handle dtype
+            out = self.spatial_processor(x_t)  # Shape: [batch, nodes, 64]
             spatial_outputs.append(out.unsqueeze(1))
         
-        spatial_out = torch.cat(spatial_outputs, dim=1)
+        spatial_out = torch.cat(spatial_outputs, dim=1)  # Shape: [batch, seq_len, nodes, 64]
         
-        # Temporal Processing
-        temporal_in = spatial_out.reshape(-1, seq_len, 64)
-        temporal_out = self.temporal_processor(temporal_in)
+        # Temporal Processing - FIXED RESHAPE
+        # Reshape to [batch*nodes, seq_len, 64] for temporal processing
+        temporal_in = spatial_out.permute(0, 2, 1, 3).reshape(batch_size * num_nodes, seq_len, 64)
+        temporal_out = self.temporal_processor(temporal_in)  # Shape: [batch*nodes, seq_len, 64]
         
-        # Cross Attention
-        spatial_feats = spatial_out.reshape(batch_size, -1, 64)
-        temporal_feats = temporal_out.reshape(batch_size, -1, 64)
-        fused = self.cross_attn(spatial_feats, temporal_feats)
+        # Reshape back to [batch, nodes, seq_len, 64]
+        temporal_out = temporal_out.reshape(batch_size, num_nodes, seq_len, 64)
         
-        # Reshape to maintain [batch, nodes, features]
-        fused = fused.view(batch_size, num_nodes, -1)
+        # Cross Attention - FIXED DIMENSIONS
+        # Average across sequence dimension for both
+        spatial_feats = spatial_out.mean(dim=1)  # Shape: [batch, nodes, 64]
+        temporal_feats = temporal_out.mean(dim=2)  # Shape: [batch, nodes, 64]
+        
+        # Now both have shape [batch, nodes, 64], perform cross-attention
+        fused = self.cross_attn(spatial_feats, temporal_feats)  # Shape: [batch, nodes, 64]
         
         # Apply regressor to each node individually
         # Output should be [batch, nodes]
