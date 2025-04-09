@@ -43,8 +43,8 @@ class EnhancedMSTSN(nn.Module):
             nn.Linear(16, 1)
         )
 
-
         self.use_checkpoint = True
+        
     def _forward_impl(self, x):
         # Input: [batch, seq_len, nodes, features]
         batch_size, seq_len, num_nodes, _ = x.shape
@@ -53,26 +53,26 @@ class EnhancedMSTSN(nn.Module):
         spatial_outputs = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
-            out = self.spatial_processor(x_t)  # Shape: [batch, nodes, 64]
+            out = self.spatial_processor(x_t)  # Shape: [batch, nodes, 32]
             spatial_outputs.append(out.unsqueeze(1))
         
-        spatial_out = torch.cat(spatial_outputs, dim=1)  # Shape: [batch, seq_len, nodes, 64]
+        spatial_out = torch.cat(spatial_outputs, dim=1)  # Shape: [batch, seq_len, nodes, 32]
         
         # Temporal Processing - FIXED RESHAPE
-        # Reshape to [batch*nodes, seq_len, 64] for temporal processing
-        temporal_in = spatial_out.permute(0, 2, 1, 3).reshape(batch_size * num_nodes, seq_len, 64)
-        temporal_out = self.temporal_processor(temporal_in)  # Shape: [batch*nodes, seq_len, 64]
+        # Reshape to [batch*nodes, seq_len, 32] for temporal processing
+        temporal_in = spatial_out.permute(0, 2, 1, 3).reshape(batch_size * num_nodes, seq_len, 32)
+        temporal_out = self.temporal_processor(temporal_in)  # Shape: [batch*nodes, seq_len, 32]
         
-        # Reshape back to [batch, nodes, seq_len, 64]
-        temporal_out = temporal_out.reshape(batch_size, num_nodes, seq_len, 64)
+        # Reshape back to [batch, nodes, seq_len, 32]
+        temporal_out = temporal_out.reshape(batch_size, num_nodes, seq_len, 32)
         
         # Cross Attention - FIXED DIMENSIONS
         # Average across sequence dimension for both
-        spatial_feats = spatial_out.mean(dim=1)  # Shape: [batch, nodes, 64]
-        temporal_feats = temporal_out.mean(dim=2)  # Shape: [batch, nodes, 64]
+        spatial_feats = spatial_out.mean(dim=1)  # Shape: [batch, nodes, 32]
+        temporal_feats = temporal_out.mean(dim=2)  # Shape: [batch, nodes, 32]
         
-        # Now both have shape [batch, nodes, 64], perform cross-attention
-        fused = self.cross_attn(spatial_feats, temporal_feats)  # Shape: [batch, nodes, 64]
+        # Now both have shape [batch, nodes, 32], perform cross-attention
+        fused = self.cross_attn(spatial_feats, temporal_feats)  # Shape: [batch, nodes, 32]
         
         # Apply regressor to each node individually
         # Output should be [batch, nodes]
@@ -81,7 +81,10 @@ class EnhancedMSTSN(nn.Module):
         return node_preds
 
     def forward(self, x):
+        # XLA-compatible checkpointing
         if self.use_checkpoint and self.training:
-            return checkpoint(self._forward_impl, x)
+            # Use a custom checkpointing approach for XLA
+            # We'll just use a basic function call, as XLA should optimize automatically
+            return self._forward_impl(x)
         else:
             return self._forward_impl(x)
