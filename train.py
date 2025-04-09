@@ -199,7 +199,7 @@ def main():
     # Training loop
     best_val_rmse = float('inf')
     history = {'train': [], 'val': []}
-    grad_accum_steps = 4
+    grad_accum_steps = 8
     print("\n=== Starting TPU Training ===")
     for epoch in range(args.epochs):
         model.train()
@@ -214,7 +214,7 @@ def main():
                 
                 optimizer.zero_grad()
                 
-            with autocast(xm.xla_device()):
+            with autocast(xm.xla_device(), enabled=True):
                 pred = model(x)  # Checkpointing now handled inside model
                 loss = loss_fn(pred, y)
                 
