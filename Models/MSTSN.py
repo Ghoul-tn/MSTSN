@@ -40,32 +40,43 @@ class EnhancedMSTSN(nn.Module):
             nn.GELU(),
             nn.Linear(32, 1)
         )
-        # Add checkpointing flags
-        self.use_checkpoint = True  # Control checkpointing globally
         # Convert all parameters to bfloat16
         for param in self.parameters():
             param.data = param.data.to(torch.bfloat16)
+        # XLA-specific checkpointing control
+        self.use_checkpoint = True
+        self.checkpoint_kwargs = {
+            'use_reentrant': False,
+            'preserve_rng_state': True
+        }
+
+    def _checkpointed_forward(self, module, *args):
+        """XLA-compatible checkpointing wrapper"""
+        if not self.use_checkpoint or not self.training:
+            return module(*args)
+        
+        # For TPU, we need to use xm.mark_step() with checkpointing
+        def custom_forward(*inputs):
+            output = module(*inputs)
+            xm.mark_step()  # Important for XLA
+            return output
+            
+        return checkpoint(custom_forward, *args, **self.checkpoint_kwargs)
 
     def forward(self, x):
-        x = x.to(torch.bfloat16)
         batch_size, seq_len, num_nodes, _ = x.shape
         
         # Spatial Processing
         spatial_out = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
-            if self.use_checkpoint:
-                spatial_out.append(checkpoint(self.spatial_processor, x_t).unsqueeze(1))
-            else:
-                spatial_out.append(self.spatial_processor(x_t).unsqueeze(1))
+            processed = self._checkpointed_forward(self.spatial_processor, x_t)
+            spatial_out.append(processed.unsqueeze(1))
         spatial_out = torch.cat(spatial_out, dim=1)
         
         # Temporal Processing
         temporal_in = spatial_out.reshape(-1, seq_len, 64)
-        if self.use_checkpoint:
-            temporal_out = checkpoint(self.temporal_processor, temporal_in)
-        else:
-            temporal_out = self.temporal_processor(temporal_in)
+        temporal_out = self._checkpointed_forward(self.temporal_processor, temporal_in)
         
         # Cross Attention
         spatial_feats = spatial_out.reshape(batch_size, -1, 64)
