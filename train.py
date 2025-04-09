@@ -181,6 +181,7 @@ def main():
     model.use_checkpoint = True  # Enable checkpointing
     print(f"Model memory: {sum(p.numel() * p.element_size() for p in model.parameters()) / 1e6}MB")
     print(f"Input dtype: {next(model.parameters()).dtype}")  # Should show torch.bfloat16
+    print(f"Checkpointing enabled: {model.use_checkpoint}")
     # Define checkpoint function
     def checkpoint_forward(x):
         def create_custom_forward(module):
