@@ -41,9 +41,7 @@ class EnhancedMSTSN(nn.Module):
             nn.GELU(),
             nn.Linear(32, 1)
         )
-        # Convert all parameters to bfloat16
-        for param in self.parameters():
-            param.data = param.data.to(torch.bfloat16)
+
         # Manual memory management
         self._spatial_outputs = None
         self._temporal_output = None
@@ -70,30 +68,25 @@ class EnhancedMSTSN(nn.Module):
         return out
 
     def forward(self, x):
+        # Input: [batch, seq_len, nodes, features]
         batch_size, seq_len, num_nodes, _ = x.shape
         
-        # Spatial Processing
-        self._spatial_outputs = []
+        # Spatial Processing (remove manual no_grad)
+        spatial_outputs = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
-            self._spatial_forward(x_t)
-        spatial_out = torch.cat(self._spatial_outputs, dim=1)
+            out = self.spatial_processor(x_t)  # Let autocast handle dtype
+            spatial_outputs.append(out.unsqueeze(1))
+        
+        spatial_out = torch.cat(spatial_outputs, dim=1)
         
         # Temporal Processing
         temporal_in = spatial_out.reshape(-1, seq_len, 64)
-        self._temporal_forward(temporal_in)
-        temporal_out = self._temporal_output
+        temporal_out = self.temporal_processor(temporal_in)
         
         # Cross Attention
         spatial_feats = spatial_out.reshape(batch_size, -1, 64)
         temporal_feats = temporal_out.reshape(batch_size, -1, 64)
         fused = self.cross_attn(spatial_feats, temporal_feats)
         
-        # Final prediction
-        output = self.regressor(fused.mean(dim=1)).squeeze(-1)
-        
-        # Clear intermediate values
-        self._spatial_outputs = None
-        self._temporal_output = None
-        
-        return output
+        return self.regressor(fused.mean(dim=1)).squeeze(-1)
