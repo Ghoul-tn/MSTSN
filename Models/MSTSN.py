@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch_xla.core.xla_model as xm
 from Models.SAM.GCN import SpatialProcessor
 from Models.TEM.GRU import TemporalTransformer
+from torch.utils.checkpoint import checkpoint
 
 class CrossAttention(nn.Module):
     def __init__(self, embed_dim, num_heads):
@@ -42,32 +43,9 @@ class EnhancedMSTSN(nn.Module):
             nn.Linear(16, 1)
         )
 
-        # Manual memory management
-        self._spatial_outputs = None
-        self._temporal_output = None
 
-    def _spatial_forward(self, x_t):
-        """Forward pass with manual memory management"""
-        # Clear previous outputs
-        if self._spatial_outputs is None:
-            self._spatial_outputs = []
-        
-        # Forward pass with manual memory clearing
-        with torch.no_grad():
-            out = self.spatial_processor(x_t)
-        self._spatial_outputs.append(out.unsqueeze(1))
-        xm.mark_step()  # Important for XLA
-        return out
-
-    def _temporal_forward(self, x):
-        """Temporal forward with manual memory management"""
-        with torch.no_grad():
-            out = self.temporal_processor(x)
-        self._temporal_output = out
-        xm.mark_step()
-        return out
-
-    def forward(self, x):
+        self.use_checkpoint = True
+    def _forward_impl(self, x):
         # Input: [batch, seq_len, nodes, features]
         batch_size, seq_len, num_nodes, _ = x.shape
         
@@ -101,3 +79,9 @@ class EnhancedMSTSN(nn.Module):
         node_preds = self.regressor(fused).squeeze(-1)
         
         return node_preds
+
+    def forward(self, x):
+        if self.use_checkpoint and self.training:
+            return checkpoint(self._forward_impl, x)
+        else:
+            return self._forward_impl(x)
