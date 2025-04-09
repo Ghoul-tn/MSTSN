@@ -229,6 +229,7 @@ def main():
                 loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
+                xm.mark_step()
                 if (i + 1) % grad_accum_steps == 0:
                     xm.optimizer_step(optimizer)
                     optimizer.zero_grad()
