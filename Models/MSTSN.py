@@ -54,30 +54,37 @@ class EnhancedMSTSN(nn.Module):
         if self._spatial_outputs is None:
             self._spatial_outputs = []
         
-        # Forward pass with manual memory clearing
-        with torch.no_grad():
-            out = self.spatial_processor(x_t)
+        # Forward pass without torch.no_grad() since we need gradients
+        out = self.spatial_processor(x_t)
+        # Ensure consistent type (bfloat16)
+        out = out.to(torch.bfloat16)
         self._spatial_outputs.append(out.unsqueeze(1))
         xm.mark_step()  # Important for XLA
         return out
-
+    
     def _temporal_forward(self, x):
         """Temporal forward with manual memory management"""
-        with torch.no_grad():
-            out = self.temporal_processor(x)
+        # Remove torch.no_grad() as we need gradients during training
+        out = self.temporal_processor(x)
         self._temporal_output = out
         xm.mark_step()
         return out
-
+    
     def forward(self, x):
         batch_size, seq_len, num_nodes, _ = x.shape
+        
+        # Ensure input is in bfloat16
+        x = x.to(torch.bfloat16)
         
         # Spatial Processing
         self._spatial_outputs = []
         for t in range(seq_len):
             x_t = x[:, t, :, :]
             self._spatial_forward(x_t)
-        spatial_out = torch.cat(self._spatial_outputs, dim=1)
+        
+        # Ensure consistent type before concatenation
+        spatial_outputs = [out.to(torch.bfloat16) for out in self._spatial_outputs]
+        spatial_out = torch.cat(spatial_outputs, dim=1)
         
         # Temporal Processing
         temporal_in = spatial_out.reshape(-1, seq_len, 64)
