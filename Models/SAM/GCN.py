@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv
 from torch.utils.checkpoint import checkpoint
 import torch_xla.core.xla_model as xm
-
 class AdaptiveAdjacency(nn.Module):
     def __init__(self, num_nodes, hidden_dim):
         super().__init__()
@@ -24,14 +23,17 @@ class BatchedGAT(nn.Module):
         self.gat = GATv2Conv(in_dim, self.per_head_dim, heads=heads, concat=True)
         
     def forward(self, x, adj):
-        outputs = []
-        for b in range(x.size(0)):
-            edge_index = adj[b].nonzero().t()
-            out = self.gat(x[b], edge_index)
-            outputs.append(out)
-            del edge_index, out  # Critical for TPU memory
-            xm.mark_step()  # Force XLA execution
-        return torch.stack(outputs)
+        batch_size = x.size(0)
+        # Remove explicit dtype casting
+        outputs = torch.zeros(batch_size, x.size(1), self.per_head_dim * self.heads,
+                            device=x.device)  # Let XLA decide dtype
+        
+        for b in range(batch_size):
+            edge_index = adj[b].nonzero(as_tuple=False).t()
+            outputs[b] = self.gat(x[b], edge_index)  # No float() conversion
+            
+        return outputs
+
 class SpatialProcessor(nn.Module):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
         super().__init__()
@@ -41,7 +43,15 @@ class SpatialProcessor(nn.Module):
         self.dropout = nn.Dropout(0.3)
 
     def forward(self, x):
-        adj = self.adaptive_adj(x.size(0))
+        # Use functional dropout to save memory
+        batch_size = x.size(0)
+        
+        # Calculate adjacency matrix but only for the current batch
+        adj = self.adaptive_adj(batch_size)
+        
+        # Apply GAT layers with intermediate memory cleanup
         x = F.relu(self.gat1(x, adj))
-        x = self.dropout(x)
+        x = F.dropout(x, p=0.2, training=self.training)  # Functional dropout
+        xm.mark_step()  # Tell XLA to materialize tensors here, reducing peak memory
+        
         return self.gat2(x, adj)  # Output will be exactly out_dim
