@@ -13,7 +13,7 @@ from torch_xla.amp import autocast, GradScaler
 from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
 from Models.MSTSN import EnhancedMSTSN
 
-# os.environ['XLA_USE_BF16'] = '1'  # Use bfloat16 where possible
+os.environ['XLA_USE_BF16'] = '1'  # Use bfloat16 where possible
 os.environ['XLA_TENSOR_ALLOCATOR_MAX_BYTES'] = '3221225472'  # 3GB buffer
 
 
@@ -82,8 +82,7 @@ def parse_args():
 
 def collate_fn(batch):
     features, targets = torch.stack([item[0] for item in batch]), torch.stack([item[1] for item in batch])
-    return features.half(), targets.half()  # FP16 for memory savings
-
+    return features.to(torch.bfloat16), targets.to(torch.bfloat16)  # bfloat16 for TPU
 def compute_metrics(y_true, y_pred, loss=None):
     metrics = {
         'mse': mean_squared_error(y_true, y_pred),
@@ -224,8 +223,9 @@ def main():
                 
                 optimizer.zero_grad()
                 
-            with autocast(xm.xla_device()):
-                pred = model(x)  # Checkpointing now handled inside model
+                x = x.to(torch.bfloat16)
+                y = y.to(torch.bfloat16)
+                pred = model(x)
                 loss = loss_fn(pred, y)
                 
                 scaler.scale(loss).backward()
