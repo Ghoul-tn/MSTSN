@@ -179,29 +179,18 @@ def main():
 
     # Model initialization
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
-    # model.use_checkpoint = True  # Enable checkpointing
+    model.use_checkpoint = True  # Enable checkpointing
     print(f"Model memory: {sum(p.numel() * p.element_size() for p in model.parameters()) / 1e6}MB")
     print(f"Input dtype: {next(model.parameters()).dtype}")  # Should show torch.bfloat16
-    # print(f"Checkpointing enabled: {model.use_checkpoint}")
-    # Define checkpoint function
-    def checkpoint_forward(x):
-        def create_custom_forward(module):
-            def custom_forward(*inputs):
-                return module(inputs[0])
-            return custom_forward
-        
-        # Checkpoint each major component separately
-        x = checkpoint(create_custom_forward(model.spatial_processor), x)
-        x = x.reshape(-1, args.seq_len, x.size(-1))  # Reshape for temporal
-        x = checkpoint(create_custom_forward(model.temporal_processor), x)
-        return x
+    print(f"Checkpointing enabled: {model.use_checkpoint}")
+
     # Optimizer - Using AdamW instead of Adafactor for stability
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
         weight_decay=args.weight_decay
     )
-
+    optimizer = xm.optimizers.AdamW(optimizer.param_groups)
     
         
     loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
