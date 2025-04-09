@@ -80,9 +80,10 @@ def parse_args():
     
     return parser.parse_args()
 
+# Remove manual bfloat16 casting in the dataset
 def collate_fn(batch):
     features, targets = torch.stack([item[0] for item in batch]), torch.stack([item[1] for item in batch])
-    return features.half(), targets.half()  # FP16 for memory savings
+    return features.to(torch.float32), targets.to(torch.float32)  # Let XLA handle dtype
 
 def compute_metrics(y_true, y_pred, loss=None):
     metrics = {
@@ -177,7 +178,6 @@ def main():
 
     # Model initialization
     model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
-    model = model.to(torch.bfloat16)
     # model.use_checkpoint = True  # Enable checkpointing
     print(f"Model memory: {sum(p.numel() * p.element_size() for p in model.parameters()) / 1e6}MB")
     print(f"Input dtype: {next(model.parameters()).dtype}")  # Should show torch.bfloat16
