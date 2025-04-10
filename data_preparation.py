@@ -29,9 +29,9 @@ class GambiaDataProcessor:
 
         # Create valid pixel mask
         valid_mask = (
-            (~np.isnan(ndvi).all(axis=0) & 
-            (~np.isnan(soil).all(axis=0) & 
-            (~np.isnan(spi).all(axis=0) & 
+            (~np.isnan(ndvi).all(axis=0)) & 
+            (~np.isnan(soil).all(axis=0)) & 
+            (~np.isnan(spi).all(axis=0)) & 
             (~np.isnan(lst).all(axis=0))
         self.valid_pixels = np.where(valid_mask)
         num_nodes = len(self.valid_pixels[0])
