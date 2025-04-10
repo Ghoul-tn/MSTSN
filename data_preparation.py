@@ -14,7 +14,7 @@ class GambiaDataProcessor:
             'ndvi': MinMaxScaler(feature_range=(0, 1)),
             'soil': StandardScaler(),
             'lst': StandardScaler(),
-            'spi': QuantileTransformer(output_distribution='normal', n_quantiles=min(1000, len(features)))
+            'spi': QuantileTransformer(output_distribution='normal', n_quantiles=1000)
         }
 
     def process_data(self):
