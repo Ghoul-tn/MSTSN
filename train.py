@@ -106,13 +106,24 @@ def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
     
-    # TPU Setup
-    resolver = tf.distribute.cluster_resolver.TPUClusterResolver.connect()
-    tpu_strategy = tf.distribute.TPUStrategy(resolver)
+    # TPU Setup for Kaggle
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='')
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        tpu_strategy = tf.distribute.TPUStrategy(resolver)
+        print("Running on TPU:", resolver.master())
+    except ValueError:
+        print("TPU not found, falling back to GPU/CPU")
+        tpu_strategy = tf.distribute.get_strategy()
+    
+    print(f"Number of replicas: {tpu_strategy.num_replicas_in_sync}")
     
     # Mixed precision
     if args.mixed_precision:
-        tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
+        policy = tf.keras.mixed_precision.Policy('mixed_bfloat16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+        print('Mixed precision enabled')
     
     # Data loading
     processor = GambiaDataProcessor(args.data_path)
