@@ -102,22 +102,29 @@ def parse_args():
     
     return parser.parse_args()
 
+def configure_tpu():
+    try:
+        resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
+        tf.config.experimental_connect_to_cluster(resolver)
+        tf.tpu.experimental.initialize_tpu_system(resolver)
+        strategy = tf.distribute.TPUStrategy(resolver)
+        print("Running on TPU:", resolver.master())
+        return strategy, True
+    except:
+        strategy = tf.distribute.get_strategy()
+        print("TPU not found, falling back to GPU/CPU")
+        return strategy, False
+
+
 def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
     
-    # TPU Setup for Kaggle
-    try:
-        resolver = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='')
-        tf.config.experimental_connect_to_cluster(resolver)
-        tf.tpu.experimental.initialize_tpu_system(resolver)
-        tpu_strategy = tf.distribute.TPUStrategy(resolver)
-        print("Running on TPU:", resolver.master())
-    except ValueError:
-        print("TPU not found, falling back to GPU/CPU")
-        tpu_strategy = tf.distribute.get_strategy()
+    strategy, using_tpu = configure_tpu()
     
-    print(f"Number of replicas: {tpu_strategy.num_replicas_in_sync}")
+    # Adjust batch size for TPU
+    if using_tpu:
+        args.batch_size = args.batch_size * strategy.num_replicas_in_sync
     
     # Mixed precision
     if args.mixed_precision:
@@ -187,12 +194,20 @@ def main():
     ]
     
     # Training
+    # First calculate steps per epoch
+    train_steps = len(train_ds) // args.batch_size
+    val_steps = len(val_ds) // args.batch_size
+    
     history = model.fit(
         train_ds,
-        validation_data=val_ds,
         epochs=args.epochs,
-        callbacks=callbacks,
-        verbose=2 if args.mixed_precision else 1
+        validation_data=val_ds,
+        steps_per_epoch=train_steps,
+        validation_steps=val_steps,
+        callbacks=[
+            tf.keras.callbacks.EarlyStopping(patience=15),
+            tf.keras.callbacks.ModelCheckpoint(filepath=os.path.join(args.results_dir, 'best_model.h5'))
+        ]
     )
     
     # Save final model
