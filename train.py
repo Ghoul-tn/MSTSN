@@ -2,41 +2,30 @@ import argparse
 import os
 import sys
 from packaging import version
-import numpy as np
-import tensorflow as tf
-from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_split
-from mstsn import EnhancedMSTSN
 
 
 
+import argparse
+import os
+import sys
+from packaging import version 
 # Check numpy version before importing anything else
 # Version check
-if version.parse(np.__version__) >= version.parse("2.0.0"):
-    raise ImportError("NumPy 2.x detected - please downgrade to NumPy 1.x\n"
-                    "Run: !pip install 'numpy<2' --force-reinstall")
-
-# Now safe to import TensorFlow
-import tensorflow as tf
-print(f"Using TensorFlow {tf.__version__} with NumPy {np.__version__}")
-
-
-
-def check_tf_numpy_compatibility():
-    """Verify TF-NumPy compatibility"""
-    try:
-        test_arr = np.array([1, 2, 3], dtype=np.float32)
-        tf.convert_to_tensor(test_arr)
-        return True
-    except Exception as e:
-        print(f"Compatibility error: {e}")
-        return False
-
-if not check_tf_numpy_compatibility():
-    print("\nFIX REQUIRED: Run these commands in order:")
-    print("1. !pip uninstall numpy tensorflow -y")
-    print("2. !pip install 'numpy<2' 'tensorflow==2.12.*'")
+try:
+    import numpy as np
+    if version.parse(np.__version__) >= version.parse("2.0.0"):
+        raise ImportError("NumPy 2.x detected - requires NumPy 1.x")
+except ImportError as e:
+    print(f"Error: {e}")
+    print("Please run: !pip install 'numpy<2' --force-reinstall")
     sys.exit(1)
 
+# Now safely import TensorFlow
+import tensorflow as tf
+print(f"Running with TensorFlow {tf.__version__} and NumPy {np.__version__}")
+
+from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_split
+from mstsn import EnhancedMSTSN
 
 class DroughtMetrics(tf.keras.metrics.Metric):
     def __init__(self, name='drought_metrics', **kwargs):
