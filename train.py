@@ -165,7 +165,7 @@ def main():
     
     # Model configuration
     with strategy.scope():  # Fixed: Changed from tpu_strategy to strategy
-        model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0])
+        model = EnhancedMSTSN(num_nodes=processor.num_nodes)
         
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,  # Changed to use scheduler
