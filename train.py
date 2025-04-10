@@ -1,16 +1,9 @@
 import argparse
 import os
 import sys
-from packaging import version
-
-
-
-import argparse
-import os
-import sys
 from packaging import version 
+
 # Check numpy version before importing anything else
-# Version check
 try:
     import numpy as np
     if version.parse(np.__version__) >= version.parse("2.0.0"):
@@ -66,6 +59,7 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         for var in self.variables:
             var.assign(0.0)
 
+@tf.function
 def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     base_loss = tf.keras.losses.Huber(delta=0.5)(y_true, y_pred)
     
@@ -115,6 +109,19 @@ def configure_tpu():
         print("TPU not found, falling back to GPU/CPU")
         return strategy, False
 
+# Learning rate scheduler for transformer training
+def get_lr_schedule(initial_lr, warmup_steps=1000):
+    def lr_schedule(step):
+        # Linear warmup followed by cosine decay
+        if step < warmup_steps:
+            return initial_lr * (step / warmup_steps)
+        else:
+            decay_steps = 100000  # Adjust as needed
+            step_after_warmup = step - warmup_steps
+            cosine_decay = 0.5 * (1 + tf.cos(tf.constant(np.pi) * step_after_warmup / decay_steps))
+            return initial_lr * cosine_decay
+    
+    return lr_schedule
 
 def main():
     args = parse_args()
@@ -140,7 +147,7 @@ def main():
     (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
     
     # Create datasets
-    with tpu_strategy.scope():
+    with strategy.scope():  # Fixed: Changed from tpu_strategy to strategy
         train_ds = create_tf_dataset(
             train_feat, train_targ,
             seq_len=args.seq_len,
@@ -153,12 +160,15 @@ def main():
             batch_size=args.batch_size
         )
     
+    # Apply learning rate schedule with warmup
+    lr_schedule = get_lr_schedule(args.lr)
+    
     # Model configuration
-    with tpu_strategy.scope():
+    with strategy.scope():  # Fixed: Changed from tpu_strategy to strategy
         model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0])
         
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=args.lr,
+            learning_rate=lr_schedule,  # Changed to use scheduler
             weight_decay=args.weight_decay
         )
         
@@ -173,7 +183,7 @@ def main():
             steps_per_execution=16  # Critical for TPU performance
         )
     
-    # Callbacks
+    # Callbacks - Fixed: Removed duplicate callbacks
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             patience=15,
@@ -193,21 +203,14 @@ def main():
         )
     ]
     
-    # Training
-    # First calculate steps per epoch
-    train_steps = len(train_ds) // args.batch_size
-    val_steps = len(val_ds) // args.batch_size
+    # Fixed: Removed incorrect dataset size calculation
+    # Instead, let TensorFlow determine the steps automatically
     
     history = model.fit(
         train_ds,
         epochs=args.epochs,
         validation_data=val_ds,
-        steps_per_epoch=train_steps,
-        validation_steps=val_steps,
-        callbacks=[
-            tf.keras.callbacks.EarlyStopping(patience=15),
-            tf.keras.callbacks.ModelCheckpoint(filepath=os.path.join(args.results_dir, 'best_model.h5'))
-        ]
+        callbacks=callbacks  # Fixed: Using the properly defined callbacks
     )
     
     # Save final model
