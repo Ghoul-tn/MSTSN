@@ -9,7 +9,7 @@ class GambiaDataProcessor:
         print(f"\nInitializing DataProcessor with data from: {data_path}")
         self.data = np.load(data_path)
         self.valid_pixels = None
-        self.adj_matrix = None
+        self.num_nodes = None  # Store number of nodes instead of full adjacency matrix
         self.scalers = {
             'ndvi': MinMaxScaler(feature_range=(0, 1)),
             'soil': StandardScaler(),
@@ -35,11 +35,12 @@ class GambiaDataProcessor:
             (~np.isnan(lst)).all(axis=0)
         )
         self.valid_pixels = np.where(valid_mask)
-        num_nodes = len(self.valid_pixels[0])
+        self.num_nodes = len(self.valid_pixels[0])
+        print(f"Found {self.num_nodes} valid pixels for processing")
 
         # Initialize arrays - now 3D: [time, nodes, features]
-        features = np.zeros((287, num_nodes, 3), dtype=np.float32)
-        targets = np.zeros((287, num_nodes), dtype=np.float32)
+        features = np.zeros((287, self.num_nodes, 3), dtype=np.float32)
+        targets = np.zeros((287, self.num_nodes), dtype=np.float32)
 
         # Extract valid pixels
         y_idx, x_idx = self.valid_pixels
@@ -50,7 +51,7 @@ class GambiaDataProcessor:
             targets[t, :] = spi[t, y_idx, x_idx]        # SPI
 
         # Interpolate missing LST values
-        for node in range(num_nodes):
+        for node in range(self.num_nodes):
             lst_series = features[:, node, 2]
             valid_mask = ~np.isnan(lst_series)
             if valid_mask.sum() > 1:
@@ -65,19 +66,27 @@ class GambiaDataProcessor:
                 features[:, node, 2] = np.nan_to_num(lst_series, nan=np.nanmean(lst_series))
 
         # Apply normalizations
-        features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, num_nodes)
-        features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, num_nodes)
-        features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, num_nodes)
-        targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, num_nodes)
+        features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, self.num_nodes)
+        features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, self.num_nodes)
+        features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, self.num_nodes)
+        targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, self.num_nodes)
 
-        # Create adjacency matrix using TensorFlow-compatible format
-        coords = np.column_stack(self.valid_pixels)
-        distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
-        self.adj_matrix = (distances <= 10).astype(float)
-        np.fill_diagonal(self.adj_matrix, 0)
-        self.adj_matrix = scipy.sparse.csr_matrix(self.adj_matrix)
+        # No longer creating adjacency matrix here to save memory
+        # The model's AdaptiveAdjacency layer will handle spatial relationships
 
         return features, targets
+
+    def create_adjacency_on_demand(self, threshold=10):
+        """Create adjacency matrix only when explicitly requested"""
+        if self.valid_pixels is None:
+            raise ValueError("Must call process_data before creating adjacency matrix")
+            
+        # Create adjacency matrix if needed for analysis or visualization
+        coords = np.column_stack(self.valid_pixels)
+        distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
+        adj_matrix = (distances <= threshold).astype(float)
+        np.fill_diagonal(adj_matrix, 0)
+        return scipy.sparse.csr_matrix(adj_matrix)
 
 def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False):
     """Creates TensorFlow dataset with TPU-optimized pipeline"""
