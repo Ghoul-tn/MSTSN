@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.keras import layers, Model, TransformerEncoderLayer
+from tensorflow.keras import layers, Model
 from spektral.layers import GATConv
 
 class AdaptiveAdjacency(layers.Layer):
@@ -46,20 +46,30 @@ class TemporalTransformer(Model):
     def __init__(self, input_dim, num_heads, ff_dim, num_layers):
         super().__init__()
         self.enc_layers = [
-            layers.TransformerEncoderLayer(
+            tf.keras.layers.MultiHeadAttention(
                 num_heads=num_heads,
-                intermediate_dim=ff_dim,
-                dropout=0.1,
-                activation='gelu',
-                norm_first=True
-            ) for _ in range(num_layers)
+                key_dim=input_dim // num_heads
+            ),
+            tf.keras.Sequential([
+                tf.keras.layers.Dense(ff_dim, activation='gelu'),
+                tf.keras.layers.Dense(input_dim)
+            ])
         ]
-        self.norm = layers.LayerNormalization()
+        self.layernorm1 = tf.keras.layers.LayerNormalization()
+        self.layernorm2 = tf.keras.layers.LayerNormalization()
+        self.num_layers = num_layers
+        self.dropout = tf.keras.layers.Dropout(0.1)
         
     def call(self, x):
-        for layer in self.enc_layers:
-            x = layer(x)
-        return self.norm(x)
+        for _ in range(self.num_layers):
+            attn_output = self.enc_layers[0](x, x)
+            attn_output = self.dropout(attn_output)
+            out1 = self.layernorm1(x + attn_output)
+            
+            ffn_output = self.enc_layers[1](out1)
+            ffn_output = self.dropout(ffn_output)
+            x = self.layernorm2(out1 + ffn_output)
+        return x
 
 class CrossAttention(layers.Layer):
     def __init__(self, embed_dim, num_heads):
