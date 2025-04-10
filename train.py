@@ -1,7 +1,7 @@
 import argparse
 import os
 import sys
-import pkg_resources
+from packaging import version
 import numpy as np
 import tensorflow as tf
 from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_split
@@ -10,14 +10,10 @@ from mstsn import EnhancedMSTSN
 
 
 # Check numpy version before importing anything else
-try:
-    import numpy as np
-    if pkg_resources.parse_version(np.__version__) >= pkg_resources.parse_version("2.0.0"):
-        raise ImportError("NumPy 2.x detected - please downgrade to NumPy 1.x")
-except ImportError as e:
-    print(f"CRITICAL: {e}")
-    print("Run this command first: !pip install 'numpy<2' --force-reinstall")
-    sys.exit(1)
+# Version check
+if version.parse(np.__version__) >= version.parse("2.0.0"):
+    raise ImportError("NumPy 2.x detected - please downgrade to NumPy 1.x\n"
+                    "Run: !pip install 'numpy<2' --force-reinstall")
 
 # Now safe to import TensorFlow
 import tensorflow as tf
