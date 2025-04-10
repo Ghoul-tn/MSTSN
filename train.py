@@ -1,272 +1,176 @@
 import argparse
 import os
 import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from tqdm import tqdm
-import random
-import torch_xla.core.xla_model as xm
-import torch_xla.distributed.parallel_loader as pl
-from torch_xla.amp import autocast, GradScaler
-from data_preparation import GambiaDataProcessor, GambiaDroughtDataset
-from Models.MSTSN import EnhancedMSTSN
+import tensorflow as tf
+from data_preparation_tf import GambiaDataProcessor, create_tf_dataset, train_val_split
+from mstsn_tf import EnhancedMSTSN
 
-# os.environ['XLA_USE_BF16'] = '1'  # Force bfloat16
-# os.environ['XLA_CACHE_SIZE'] = '2147483648'  # 2GB cache
-# os.environ['XLA_DISABLE_METRICS'] = '1'  # Reduce overhead
+class DroughtMetrics(tf.keras.metrics.Metric):
+    def __init__(self, name='drought_metrics', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.drought_rmse = self.add_weight(name='drmse', initializer='zeros')
+        self.false_alarm = self.add_weight(name='fa', initializer='zeros')
+        self.detection_rate = self.add_weight(name='dr', initializer='zeros')
+        self.count = self.add_weight(name='count', initializer='zeros')
 
-
-class EarlyStopper:
-    def __init__(self, patience=15, min_delta=0.005):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.best_loss = np.inf
-
-    def __call__(self, val_loss):
-        if val_loss < self.best_loss - self.min_delta:
-            self.best_loss = val_loss
-            self.counter = 0
-        else:
-            self.counter += 1
-        return self.counter >= self.patience
-
-class ImprovedDroughtLoss(nn.Module):
-    def __init__(self, base_loss=nn.HuberLoss(delta=0.5), alpha=3.0, gamma=2.0):
-        super().__init__()
-        self.base_loss = base_loss
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def forward(self, pred, target):
-        # Ensure shapes match [batch, nodes]
-        assert pred.shape == target.shape, f"Shapes must match: pred {pred.shape} vs target {target.shape}"
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        drought_mask = tf.cast(y_true < -0.5, tf.float32)
+        safe_mask = 1.0 - drought_mask
         
-        base = self.base_loss(pred, target)
-        drought_mask = (target < -0.5).float()
-        error = torch.abs(pred - target)
-        focal_weight = (1 - torch.exp(-error)) ** self.gamma
-        drought_err = focal_weight * error * drought_mask
-        return base + self.alpha * torch.mean(drought_err)
-class DroughtMetrics:
-    @staticmethod
-    def calculate(y_true, y_pred):
-        drought_mask = y_true < -0.5
-        metrics = {
-            'drought_rmse': np.sqrt(mean_squared_error(y_true[drought_mask], y_pred[drought_mask])),
-            'false_alarm': np.mean((y_pred < -0.5) & ~drought_mask),
-            'detection_rate': np.mean((y_pred[drought_mask] < -0.5))
+        # Drought RMSE
+        squared_errors = tf.square(y_true - y_pred) * drought_mask
+        sum_squared_errors = tf.reduce_sum(squared_errors)
+        total_drought = tf.maximum(tf.reduce_sum(drought_mask), 1e-7)
+        self.drought_rmse.assign_add(tf.sqrt(sum_squared_errors / total_drought))
+        
+        # False alarm rate
+        false_alarms = tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32) * safe_mask
+        self.false_alarm.assign_add(tf.reduce_sum(false_alarms) / tf.maximum(tf.reduce_sum(safe_mask), 1e-7))
+        
+        # Detection rate
+        correct_detections = tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32) * drought_mask
+        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / tf.maximum(total_drought, 1e-7))
+        
+        self.count.assign_add(1.0)
+
+    def result(self):
+        return {
+            'drought_rmse': self.drought_rmse / self.count,
+            'false_alarm': self.false_alarm / self.count,
+            'detection_rate': self.detection_rate / self.count
         }
-        return {k: 0.0 if np.isnan(v) else v for k,v in metrics.items()}
+
+    def reset_state(self):
+        for var in self.variables:
+            var.assign(0.0)
+
+def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
+    base_loss = tf.keras.losses.Huber(delta=0.5)(y_true, y_pred)
+    
+    drought_mask = tf.cast(y_true < -0.5, tf.float32)
+    error = tf.abs(y_pred - y_true)
+    focal_weight = tf.pow(1.0 - tf.exp(-error), gamma)
+    drought_err = tf.reduce_mean(focal_weight * error * drought_mask) * alpha
+    
+    return base_loss + drought_err
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction')
+    parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
     
     # Data parameters
-    parser.add_argument('--data_path', type=str, 
+    parser.add_argument('--data_path', type=str,
                       default='/kaggle/input/gambia-upper-river-time-series/Gambia_The_combined.npz')
     parser.add_argument('--seq_len', type=int, default=12)
     
     # Training parameters
-    parser.add_argument('--batch_size', type=int, default=16)  # Increased for TPU
+    parser.add_argument('--batch_size', type=int, default=32)  # TPU-friendly batch size
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-3)
+    parser.add_argument('--alpha', type=float, default=3.0,
+                      help='Weight for drought-specific loss component')
+    parser.add_argument('--gamma', type=float, default=2.0,
+                      help='Focal weight exponent for drought samples')
     
     # System parameters
-    parser.add_argument('--results_dir', type=str, 
-                      default='/kaggle/working/MSTSN/enhanced_results')
+    parser.add_argument('--results_dir', type=str,
+                      default='/kaggle/working/MSTSN/enhanced_results_tf')
+    parser.add_argument('--mixed_precision', action='store_true',
+                      help='Enable bfloat16 mixed precision training')
     
     return parser.parse_args()
-
-# Remove manual bfloat16 casting in the dataset
-def collate_fn(batch):
-    features, targets = torch.stack([item[0] for item in batch]), torch.stack([item[1] for item in batch])
-    return features.to(torch.float32), targets.to(torch.float32)  # Let XLA handle dtype
-
-def compute_metrics(y_true, y_pred, loss=None):
-    metrics = {
-        'mse': mean_squared_error(y_true, y_pred),
-        'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
-        'mae': mean_absolute_error(y_true, y_pred),
-        'r2': r2_score(y_true, y_pred),
-        **DroughtMetrics.calculate(y_true, y_pred)
-    }
-    if loss is not None:
-        metrics['loss'] = loss
-    return metrics
-    
-def evaluate(model, dataloader, device, loss_fn=None):
-    model.eval()
-    all_preds = []
-    all_targets = []
-    total_loss = 0.0
-    
-    with torch.no_grad():
-        for x, y in dataloader:
-            x, y = x.to(device), y.to(device)
-            preds = model(x)
-            all_preds.append(preds.cpu().numpy())
-            all_targets.append(y.cpu().numpy())
-            if loss_fn is not None:
-                total_loss += loss_fn(preds, y).item() * x.size(0)
-    
-    y_true = np.concatenate(all_targets)
-    y_pred = np.concatenate(all_preds)
-    loss = total_loss / len(dataloader.dataset) if loss_fn is not None else None
-    return compute_metrics(y_true, y_pred, loss=loss)
 
 def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
     
     # TPU Setup
-    device = xm.xla_device()
-    early_stopper = EarlyStopper()
-    # Force FP16 across all operations
-    torch.set_float32_matmul_precision('medium')  # For TPU efficiency
+    resolver = tf.distribute.cluster_resolver.TPUClusterResolver.connect()
+    tpu_strategy = tf.distribute.TPUStrategy(resolver)
+    
+    # Mixed precision
+    if args.mixed_precision:
+        tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
+    
     # Data loading
     processor = GambiaDataProcessor(args.data_path)
     features, targets = processor.process_data()
     
-    # Dataset setup
-    full_dataset = GambiaDroughtDataset(
-        features=features,
-        targets=targets,
-        valid_pixels=processor.valid_pixels,
-        seq_len=args.seq_len
-    )
+    # Split datasets
+    (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
     
-    # Temporal split
-    total_samples = len(full_dataset)
-    train_size = int(0.8 * total_samples)
-    train_indices = list(range(train_size))
-    val_indices = list(range(train_size, total_samples))
-    
-    train_set = Subset(full_dataset, train_indices)
-    val_set = Subset(full_dataset, val_indices)
-    train_set.dataset.training = True
-    val_set.dataset.training = False
-
-    # TPU-Optimized DataLoaders
-    train_loader = DataLoader(
-        train_set,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=0,  # Reduced from 2 to 0 for TPU stability
-        collate_fn=collate_fn,
-        pin_memory=True,
-        drop_last=True,
-        persistent_workers=False  # Add this
-    )
-    
-    val_loader = DataLoader(
-        val_set,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=0,  # Reduced from 2 to 0
-        collate_fn=collate_fn,
-        pin_memory=True,
-        drop_last=True,
-        persistent_workers=False
-    )
-    
-    # Wrap with TPU parallel loader
-    train_loader = pl.MpDeviceLoader(train_loader, device)
-    val_loader = pl.MpDeviceLoader(val_loader, device)
-
-    # Model initialization
-    model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0]).to(device)
-    model.use_checkpoint = True  # Enable checkpointing
-    print(f"Model memory: {sum(p.numel() * p.element_size() for p in model.parameters()) / 1e6}MB")
-    print(f"Input dtype: {next(model.parameters()).dtype}")  # Should show torch.bfloat16
-    print(f"Checkpointing enabled: {model.use_checkpoint}")
-
-    # Optimizer - Using AdamW instead of Adafactor for stability
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay
-    )
-
-    
-        
-    loss_fn = ImprovedDroughtLoss(alpha=3.0, gamma=2.0)
-    scaler = GradScaler('xla')
-
-    # Training loop
-    best_val_rmse = float('inf')
-    history = {'train': [], 'val': []}
-    grad_accum_steps = 8
-    print("\n=== Starting TPU Training ===")
-    for epoch in range(args.epochs):
-        model.train()
-        train_loss = 0.0
-        train_preds = []
-        train_targets = []
-        optimizer.zero_grad()
-        with tqdm(train_loader, unit="batch") as tepoch:
-            for i, (x, y) in enumerate(train_loader):
-                x, y = x.to(device), y.to(device)
-                tepoch.set_description(f"Epoch {epoch+1}/{args.epochs}")
-                
-                optimizer.zero_grad()
-                
-            with autocast(xm.xla_device(), enabled=True):
-                pred = model(x)  # Checkpointing now handled inside model
-                loss = loss_fn(pred, y)
-                
-                scaler.scale(loss).backward()
-                
-                if (i + 1) % grad_accum_steps == 0:
-                    xm.optimizer_step(optimizer)
-                    optimizer.zero_grad()
-                    scaler.update()
-                    xm.mark_step()
-                train_loss += loss.item() * x.size(0)
-                train_preds.append(pred.detach().cpu().numpy())
-                train_targets.append(y.detach().cpu().numpy())
-                tepoch.set_postfix(loss=loss.item())
-
-        # Training metrics
-        train_metrics = compute_metrics(
-            np.concatenate(train_targets),
-            np.concatenate(train_preds),
-            loss=train_loss / len(train_loader.dataset)
+    # Create datasets
+    with tpu_strategy.scope():
+        train_ds = create_tf_dataset(
+            train_feat, train_targ,
+            seq_len=args.seq_len,
+            batch_size=args.batch_size,
+            training=True
         )
-        history['train'].append(train_metrics)
-
-        # Validation
-        val_metrics = evaluate(model, val_loader, device, loss_fn=loss_fn)
-        history['val'].append(val_metrics)
-
-        # Early stopping check
-        if early_stopper(val_metrics['rmse']):
-            print(f"Early stopping triggered at epoch {epoch+1}")
-            break
-
-        # Save best model
-        if val_metrics['rmse'] < best_val_rmse:
-            best_val_rmse = val_metrics['rmse']
-            xm.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'metrics': val_metrics,
-                'args': vars(args)
-            }, f"{args.results_dir}/best_model.pth")
-
-        # Epoch summary
-        print(f"\nEpoch {epoch+1}/{args.epochs} Summary:")
-        print("  Training - " + " | ".join([f"{k.upper()}: {v:.4f}" for k, v in train_metrics.items()]))
-        print("  Validation - " + " | ".join([f"{k.upper()}: {v:.4f}" for k, v in val_metrics.items()]))
+        val_ds = create_tf_dataset(
+            val_feat, val_targ,
+            seq_len=args.seq_len,
+            batch_size=args.batch_size
+        )
     
-    # Final save
-    xm.save(model.state_dict(), f"{args.results_dir}/final_model.pth")
-    torch.save(history, f"{args.results_dir}/training_history.pt")
-    print(f"\nBest Validation RMSE: {best_val_rmse:.4f}")
+    # Model configuration
+    with tpu_strategy.scope():
+        model = EnhancedMSTSN(num_nodes=processor.adj_matrix.shape[0])
+        
+        optimizer = tf.keras.optimizers.AdamW(
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay
+        )
+        
+        model.compile(
+            optimizer=optimizer,
+            loss=lambda y_true,y_pred: drought_loss(y_true, y_pred, args.alpha, args.gamma),
+            metrics=[
+                tf.keras.metrics.RootMeanSquaredError(name='rmse'),
+                tf.keras.metrics.MeanAbsoluteError(name='mae'),
+                DroughtMetrics()
+            ],
+            steps_per_execution=16  # Critical for TPU performance
+        )
+    
+    # Callbacks
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            patience=15,
+            min_delta=0.005,
+            monitor='val_rmse',
+            mode='min',
+            restore_best_weights=True
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath=os.path.join(args.results_dir, 'best_model.h5'),
+            monitor='val_rmse',
+            save_best_only=True,
+            save_weights_only=False
+        ),
+        tf.keras.callbacks.CSVLogger(
+            os.path.join(args.results_dir, 'training_log.csv')
+        )
+    ]
+    
+    # Training
+    history = model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=args.epochs,
+        callbacks=callbacks,
+        verbose=2 if args.mixed_precision else 1
+    )
+    
+    # Save final model
+    model.save(os.path.join(args.results_dir, 'final_model.h5'))
+    
+    # Print final metrics
+    print("\nTraining completed. Final metrics:")
+    print(f"Best validation RMSE: {min(history.history['val_rmse']):.4f}")
+    print(f"Best validation MAE: {min(history.history['val_mae']):.4f}")
 
 if __name__ == "__main__":
+    # Enable XLA compilation
+    tf.config.optimizer.set_jit(True)
     main()
