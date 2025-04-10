@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.keras import layers, Model
+from tensorflow.keras import layers, Model, TransformerEncoderLayer
 from spektral.layers import GATConv
 
 class AdaptiveAdjacency(layers.Layer):
