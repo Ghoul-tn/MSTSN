@@ -1,90 +1,106 @@
-import torch
-import torch.nn as nn
-import torch_xla.core.xla_model as xm
-from Models.SAM.GCN import SpatialProcessor
-from Models.TEM.GRU import TemporalTransformer
-from torch.utils.checkpoint import checkpoint
+import tensorflow as tf
+from tensorflow.keras import layers, Model
+from spektral.layers import GATConv
 
-class CrossAttention(nn.Module):
+class AdaptiveAdjacency(layers.Layer):
+    def __init__(self, num_nodes, hidden_dim):
+        super().__init__()
+        self.embedding = self.add_weight(shape=(num_nodes, hidden_dim),
+                                       initializer='glorot_uniform')
+    
+    def call(self, batch_size):
+        norm_embed = tf.math.l2_normalize(self.embedding, axis=-1)
+        adj = tf.matmul(norm_embed, norm_embed, transpose_b=True)
+        return tf.tile(tf.expand_dims(adj, 0), [batch_size, 1, 1])
+
+class BatchedGAT(layers.Layer):
+    def __init__(self, out_dim, heads=4):
+        super().__init__()
+        self.gat = GATConv(out_dim//heads, heads=heads, concat=True)
+        
+    def call(self, inputs):
+        x, adj = inputs
+        batch_size = tf.shape(x)[0]
+        outputs = []
+        for b in range(batch_size):
+            edge_idx = tf.where(adj[b] > 0.5)  # Threshold for adjacency
+            outputs.append(self.gat([x[b], edge_idx]))
+        return tf.stack(outputs)
+
+class SpatialProcessor(Model):
+    def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
+        super().__init__()
+        self.adaptive_adj = AdaptiveAdjacency(num_nodes, hidden_dim)
+        self.gat1 = BatchedGAT(hidden_dim)
+        self.gat2 = BatchedGAT(out_dim)
+        self.proj = layers.Dense(hidden_dim)
+        
+    def call(self, x):
+        batch_size = tf.shape(x)[0]
+        adj = self.adaptive_adj(batch_size)
+        x = self.proj(x)
+        x = tf.nn.relu(self.gat1([x, adj]))
+        return self.gat2([x, adj])
+
+class TemporalTransformer(Model):
+    def __init__(self, input_dim, num_heads, ff_dim, num_layers):
+        super().__init__()
+        self.enc_layers = [
+            layers.TransformerEncoderLayer(
+                num_heads=num_heads,
+                intermediate_dim=ff_dim,
+                dropout=0.1,
+                activation='gelu',
+                norm_first=True
+            ) for _ in range(num_layers)
+        ]
+        self.norm = layers.LayerNormalization()
+        
+    def call(self, x):
+        for layer in self.enc_layers:
+            x = layer(x)
+        return self.norm(x)
+
+class CrossAttention(layers.Layer):
     def __init__(self, embed_dim, num_heads):
         super().__init__()
-        self.query = nn.Linear(embed_dim, embed_dim)
-        self.key = nn.Linear(embed_dim, embed_dim)
-        self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.attn = layers.MultiHeadAttention(num_heads, embed_dim)
+        
+    def call(self, inputs):
+        x1, x2 = inputs
+        return self.attn(x1, x2)
 
-    def forward(self, x1, x2):
-        q = self.query(x1)
-        k = self.key(x2)
-        return self.attn(q, k, x2)[0]
-
-class EnhancedMSTSN(nn.Module):
+class EnhancedMSTSN(Model):
     def __init__(self, num_nodes):
         super().__init__()
-        # Reduced dimensions
-        self.spatial_processor = SpatialProcessor(
-            num_nodes=num_nodes,
-            in_dim=3,
-            hidden_dim=16,  # Reduced from 64
-            out_dim=32  # Reduced from 128
-        )
+        self.spatial = SpatialProcessor(num_nodes, 3, 16, 32)
+        self.temporal = TemporalTransformer(32, 2, 64, 1)
+        self.cross_attn = CrossAttention(32, 2)
+        self.regressor = tf.keras.Sequential([
+            layers.Dense(16, activation='gelu'),
+            layers.Dense(1)
+        ])
         
-        self.temporal_processor = TemporalTransformer(
-            input_dim=32,  # Matches reduced spatial output
-            num_heads=2,
-            ff_dim=64,  # Reduced from 256
-            num_layers=1  # Reduced from 2
-        )
-        # Cross-attention dims
-        self.cross_attn = CrossAttention(embed_dim=32, num_heads=2)
-        # Smaller regressor
-        self.regressor = nn.Sequential(
-            nn.Linear(32, 16),
-            nn.GELU(),
-            nn.Linear(16, 1)
-        )
-
-        self.use_checkpoint = True
-        
-    def _forward_impl(self, x):
+    def call(self, inputs):
         # Input: [batch, seq_len, nodes, features]
-        batch_size, seq_len, num_nodes, _ = x.shape
+        batch_size = tf.shape(inputs)[0]
+        seq_len = tf.shape(inputs)[1]
+        num_nodes = tf.shape(inputs)[2]
         
         # Spatial Processing
-        spatial_outputs = []
-        for t in range(seq_len):
-            x_t = x[:, t, :, :]
-            out = self.spatial_processor(x_t)  # Shape: [batch, nodes, 32]
-            spatial_outputs.append(out.unsqueeze(1))
+        spatial_out = tf.TensorArray(tf.float32, size=seq_len)
+        for t in tf.range(seq_len):
+            spatial_out = spatial_out.write(t, self.spatial(inputs[:, t]))
+        spatial_out = tf.transpose(spatial_out.stack(), [1, 0, 2, 3])
         
-        spatial_out = torch.cat(spatial_outputs, dim=1)  # Shape: [batch, seq_len, nodes, 32]
+        # Temporal Processing
+        temporal_in = tf.reshape(spatial_out, [batch_size*num_nodes, seq_len, 32])
+        temporal_out = self.temporal(temporal_in)
+        temporal_out = tf.reshape(temporal_out, [batch_size, num_nodes, seq_len, 32])
         
-        # Temporal Processing - FIXED RESHAPE
-        # Reshape to [batch*nodes, seq_len, 32] for temporal processing
-        temporal_in = spatial_out.permute(0, 2, 1, 3).reshape(batch_size * num_nodes, seq_len, 32)
-        temporal_out = self.temporal_processor(temporal_in)  # Shape: [batch*nodes, seq_len, 32]
+        # Cross Attention
+        spatial_feats = tf.reduce_mean(spatial_out, axis=1)
+        temporal_feats = tf.reduce_mean(temporal_out, axis=2)
+        fused = self.cross_attn([spatial_feats, temporal_feats])
         
-        # Reshape back to [batch, nodes, seq_len, 32]
-        temporal_out = temporal_out.reshape(batch_size, num_nodes, seq_len, 32)
-        
-        # Cross Attention - FIXED DIMENSIONS
-        # Average across sequence dimension for both
-        spatial_feats = spatial_out.mean(dim=1)  # Shape: [batch, nodes, 32]
-        temporal_feats = temporal_out.mean(dim=2)  # Shape: [batch, nodes, 32]
-        
-        # Now both have shape [batch, nodes, 32], perform cross-attention
-        fused = self.cross_attn(spatial_feats, temporal_feats)  # Shape: [batch, nodes, 32]
-        
-        # Apply regressor to each node individually
-        # Output should be [batch, nodes]
-        node_preds = self.regressor(fused).squeeze(-1)
-        
-        return node_preds
-
-    def forward(self, x):
-        # XLA-compatible checkpointing
-        if self.use_checkpoint and self.training:
-            # Use a custom checkpointing approach for XLA
-            # We'll just use a basic function call, as XLA should optimize automatically
-            return self._forward_impl(x)
-        else:
-            return self._forward_impl(x)
+        return self.regressor(fused)[..., 0]
