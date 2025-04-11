@@ -131,6 +131,9 @@ def debug_dataset(ds, steps=2):
             print("  Dataset exhausted!")
             break
     print("=== End Debug ===\n")
+def build_model():
+    inputs = tf.keras.Input(shape=(None, 2152, 3))  # [batch, seq_len, nodes, features]
+    return EnhancedMSTSN(num_nodes=2152)(inputs)
 
 # Learning rate scheduler for transformer training
 def get_lr_schedule(initial_lr, warmup_steps=1000):
@@ -219,8 +222,12 @@ def main():
     with strategy.scope():
         # Initialize with correct number of nodes
         model = EnhancedMSTSN(num_nodes=2139)  # From your data validation
-        model.build(input_shape=(None, args.seq_len, processor.num_nodes, 3)) # [batch, seq_len, nodes, features]
-        model.summary()        
+        model = tf.keras.Model(inputs=build_model().inputs, outputs=build_model().outputs)
+        model.build(input_shape=(None, 12, 2152, 3))
+        model.summary()
+        dummy_x = tf.random.normal([2, 12, 2152, 3])
+        dummy_y = model(dummy_x)
+        print(dummy_y.shape)
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
