@@ -24,33 +24,6 @@ class BatchedGAT(layers.Layer):
         x, adj = inputs
         batch_size = tf.shape(x)[0]
         
-        # Vectorized implementation - process all batches at once
-        # Create a batched edge list from the adjacency matrices
-        edge_lists = []
-        batch_edge_indices = []
-        
-        # Using tf.map_fn to avoid explicit Python loop
-        def process_batch_item(idx):
-            # Get edges for this batch item
-            edges = tf.where(adj[idx] > 0.5)
-            # Add batch dimension
-            batch_indices = tf.fill([tf.shape(edges)[0], 1], idx)
-            return edges, batch_indices
-        
-        # Process all batches and create combined edge list
-        batched_results = tf.map_fn(
-            process_batch_item,
-            tf.range(batch_size),
-            fn_output_signature=(
-                tf.RaggedTensorSpec(shape=[None, 2], dtype=tf.int64),
-                tf.RaggedTensorSpec(shape=[None, 1], dtype=tf.int32)
-            )
-        )
-        
-        # Apply GAT to all batches
-        # Format inputs to match GAT expectations
-        features = tf.reshape(x, [-1, tf.shape(x)[-1]])  # Flatten batch dimension
-        
         # Process each batch item with the same GAT weights
         outputs = []
         for b in range(batch_size):
