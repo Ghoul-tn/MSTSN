@@ -67,7 +67,7 @@ def parse_args():
     parser.add_argument('--seq_len', type=int, default=12)
     
     # Training parameters
-    parser.add_argument('--batch_size', type=int, default=4)  # Reduced batch size for small dataset
+    parser.add_argument('--batch_size', type=int, default=16)  # Good default for ~2000 pixels
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-3)
@@ -81,20 +81,22 @@ def parse_args():
                       default='/kaggle/working/MSTSN/enhanced_results_tf')
     parser.add_argument('--mixed_precision', action='store_true',
                       help='Enable bfloat16 mixed precision training')
-    parser.add_argument('--use_tpu', action='store_true', default=False,
+    parser.add_argument('--use_tpu', action='store_true', default=True,
                       help='Attempt to use TPU if available')
     
     return parser.parse_args()
 
-def configure_distribute_strategy(use_tpu=False):
+def configure_distribute_strategy(use_tpu=True):
     """Configure appropriate distribution strategy based on available hardware and user preference"""
     if use_tpu:
         try:
+            print("Attempting to initialize TPU...")
             tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
             tf.config.experimental_connect_to_cluster(tpu)
             tf.tpu.experimental.initialize_tpu_system(tpu)
             strategy = tf.distribute.TPUStrategy(tpu)
             print(f"Running on TPU: {tpu.master()}")
+            print(f"TPU cores: {strategy.num_replicas_in_sync}")
             return strategy, True
         except Exception as e:
             print(f"TPU initialization failed: {e}")
@@ -111,68 +113,24 @@ def configure_distribute_strategy(use_tpu=False):
         strategy = tf.distribute.get_strategy()
         return strategy, False
 
-# Modified create_tf_dataset function to handle small datasets better
-def create_robust_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False, repeat=True):
-    """Creates TensorFlow dataset with better handling for small datasets"""
+def debug_dataset(ds, steps=2):
+    """Manually inspect a few batches of the dataset to verify data shapes"""
+    print("\n=== Debugging Dataset ===")
     
-    print(f"Creating dataset with {features.shape[0]} time points and {features.shape[1]} nodes")
-    
-    # Calculate effective dataset size
-    max_time = features.shape[0] - seq_len
-    dataset_size = max(0, max_time)
-    print(f"Dataset contains {dataset_size} effective samples")
-    
-    # Adjust batch size if needed
-    if dataset_size < batch_size and dataset_size > 0:
-        orig_batch = batch_size
-        batch_size = max(1, dataset_size)
-        print(f"WARNING: Dataset too small for batch size {orig_batch}. Reduced to {batch_size}")
-    
-    def generator():
-        for idx in range(max_time):
-            start_idx = max(0, idx)
-            end_idx = start_idx + seq_len
-            x_seq = features[start_idx:end_idx]
-            y_target = targets[end_idx-1]  # Predict last step in sequence
-
-            # Pad if sequence is too short
-            if len(x_seq) < seq_len:
-                padding = np.zeros((seq_len - len(x_seq), *x_seq.shape[1:]), dtype=np.float32)
-                x_seq = np.concatenate([padding, x_seq])
-
-            # Apply random masking augmentation
-            if training:
-                mask = np.random.rand(*x_seq.shape) < 0.1
-                x_seq[mask] = 0
-
-            yield x_seq, y_target
-
-    output_signature = (
-        tf.TensorSpec(shape=(seq_len, None, 3), dtype=tf.float32),  # [seq_len, nodes, features]
-        tf.TensorSpec(shape=(None,), dtype=tf.float32)              # [nodes]
-    )
-
-    dataset = tf.data.Dataset.from_generator(
-        generator,
-        output_signature=output_signature
-    )
-    
-    # Make sure dataset isn't empty
-    if dataset_size == 0:
-        print("WARNING: Empty dataset detected. Creating dummy data for testing.")
-        dummy_x = np.zeros((seq_len, features.shape[1], 3), dtype=np.float32)
-        dummy_y = np.zeros((features.shape[1],), dtype=np.float32)
-        dataset = tf.data.Dataset.from_tensors((dummy_x, dummy_y))
-
-    # Apply repeat to prevent StopIteration errors during TPU training
-    if repeat:
-        dataset = dataset.repeat()
-    
-    # Optimize pipeline
-    dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
-    
-    return dataset, dataset_size
+    # Extract and print a few samples
+    iterator = iter(ds)
+    for i in range(steps):
+        try:
+            x_batch, y_batch = next(iterator)
+            print(f"Batch {i+1}:")
+            print(f"  X shape: {x_batch.shape}")
+            print(f"  Y shape: {y_batch.shape}")
+            print(f"  X min/max: {tf.reduce_min(x_batch):.4f}/{tf.reduce_max(x_batch):.4f}")
+            print(f"  Y min/max: {tf.reduce_min(y_batch):.4f}/{tf.reduce_max(y_batch):.4f}")
+        except StopIteration:
+            print("  Dataset exhausted!")
+            break
+    print("=== End Debug ===\n")
 
 # Learning rate scheduler for transformer training
 def get_lr_schedule(initial_lr, warmup_steps=1000):
@@ -196,6 +154,7 @@ def main():
     strategy, using_tpu = configure_distribute_strategy(args.use_tpu)
 
     # Data loading
+    print(f"\nLoading data from: {args.data_path}")
     processor = GambiaDataProcessor(args.data_path)
     features, targets = processor.process_data()
     
@@ -206,12 +165,13 @@ def main():
         print("ERROR: No valid pixels found in dataset. Please check your data.")
         return
     
-    print(f"Found {processor.num_nodes} nodes for processing")
+    print(f"Working with {processor.num_nodes} valid pixels for processing")
     
     # Adjust batch size for distribution strategy
     global_batch_size = args.batch_size
     if using_tpu:
         global_batch_size = args.batch_size * strategy.num_replicas_in_sync
+        print(f"Using global batch size of {global_batch_size} for TPU")
     
     # Mixed precision
     if args.mixed_precision:
@@ -222,45 +182,51 @@ def main():
     
     # Split datasets
     (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
+    print(f"Training data shape: {train_feat.shape}, Validation data shape: {val_feat.shape}")
     
-    # Create datasets with improved handling for small datasets
+    # Create datasets
     with strategy.scope():
-        train_ds, train_size = create_robust_tf_dataset(
+        train_ds = create_tf_dataset(
             train_feat, train_targ,
             seq_len=args.seq_len,
             batch_size=global_batch_size,
             training=True
         )
         
-        val_ds, val_size = create_robust_tf_dataset(
+        val_ds = create_tf_dataset(
             val_feat, val_targ,
             seq_len=args.seq_len,
-            batch_size=global_batch_size,
-            repeat=False  # Don't repeat validation dataset
+            batch_size=global_batch_size
         )
+        
+        # Debug dataset to verify shapes
+        debug_dataset(train_ds)
     
-    # Calculate steps per epoch
-    steps_per_epoch = max(1, train_size // global_batch_size)
-    validation_steps = max(1, val_size // global_batch_size)
+    # Calculate steps per epoch - with proper estimation for your dataset size
+    time_steps = features.shape[0] - args.seq_len
+    samples_per_step = processor.num_nodes  # Each time point has processor.num_nodes samples
+    total_samples = time_steps * samples_per_step  # Total number of potential samples
+    
+    steps_per_epoch = max(1, total_samples // (global_batch_size * 100))  # Divide by 100 to make epochs faster
+    validation_steps = max(1, (total_samples // 5) // (global_batch_size * 100))  # 20% for validation
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
     # Apply learning rate schedule with warmup
-    lr_schedule = get_lr_schedule(args.lr)
+    lr_schedule = get_lr_schedule(args.lr, warmup_steps=min(1000, steps_per_epoch * 5))
     
     # Model configuration
     with strategy.scope():
-        # Check processor.num_nodes exists and is valid
-        if processor.num_nodes is None or processor.num_nodes <= 0:
-            print("ERROR: Invalid number of nodes detected. Check data processing.")
-            return
-            
         model = EnhancedMSTSN(num_nodes=processor.num_nodes)
         
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
         )
+        
+        # Compile with reasonable steps_per_execution for TPU (adjusted for dataset size)
+        steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
+        print(f"Using steps_per_execution: {steps_per_execution}")
         
         model.compile(
             optimizer=optimizer,
@@ -270,7 +236,7 @@ def main():
                 tf.keras.metrics.MeanAbsoluteError(name='mae'),
                 DroughtMetrics()
             ],
-            steps_per_execution=4 if using_tpu else 1  # Adjust for dataset size
+            steps_per_execution=steps_per_execution
         )
     
     # Callbacks
@@ -290,22 +256,37 @@ def main():
         ),
         tf.keras.callbacks.CSVLogger(
             os.path.join(args.results_dir, 'training_log.csv')
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor='val_rmse',
+            factor=0.5,
+            patience=5,
+            min_lr=1e-6,
+            verbose=1
         )
     ]
     
     # Train model with explicit steps
     try:
+        print("\nStarting model training...")
         history = model.fit(
-            train_ds,
+            train_ds.repeat(),  # Important: repeat dataset for TPU training
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
-            validation_data=val_ds,
+            validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
             validation_steps=validation_steps,
             callbacks=callbacks
         )
         
         # Save final model
-        model.save(os.path.join(args.results_dir, 'final_model.h5'))
+        try:
+            model.save(os.path.join(args.results_dir, 'final_model.h5'))
+            print(f"Model saved to {os.path.join(args.results_dir, 'final_model.h5')}")
+        except Exception as e:
+            print(f"Error saving model: {e}")
+            # Try saving weights only if full model save fails
+            model.save_weights(os.path.join(args.results_dir, 'final_model_weights.h5'))
+            print(f"Model weights saved to {os.path.join(args.results_dir, 'final_model_weights.h5')}")
         
         # Print final metrics
         print("\nTraining completed. Final metrics:")
@@ -320,6 +301,6 @@ def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    # Enable XLA compilation
+    # Enable XLA compilation for better performance
     tf.config.optimizer.set_jit(True)
     main()
