@@ -7,7 +7,7 @@ import scipy.sparse
 class GambiaDataProcessor:
     def __init__(self, data_path):
         print(f"\nInitializing DataProcessor with data from: {data_path}")
-        self.data = np.load(data_path)
+        self.data = np.load(data_path)  # Load the NPZ file once
         self.valid_pixels = None
         self.num_nodes = None
         self.scalers = {
@@ -21,12 +21,11 @@ class GambiaDataProcessor:
         """Optimized data processing with memory-efficient operations"""
         print("\n=== Processing Data ===")
         
-        # Load data with memory mapping
-        with np.load(self.data.files[0]) as data:
-            ndvi = data['NDVI']
-            soil = data['SoilMoisture']
-            spi = data['SPI']
-            lst = data['LST']
+        # Access arrays directly from the loaded NPZ file
+        ndvi = self.data['NDVI']
+        soil = self.data['SoilMoisture']
+        spi = self.data['SPI']
+        lst = self.data['LST']
 
         # Vectorized valid pixel detection
         valid_mask = (~np.isnan(ndvi)).all(axis=0) & \
