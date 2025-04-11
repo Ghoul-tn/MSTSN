@@ -58,10 +58,10 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', default='/kaggle/input/gambia-data.npz')
+    parser.add_argument('--data_path', default='/content/drive/MyDrive/Gambia Upper River/Gambia_The_combined.npz')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--results_dir', default='/kaggle/working/results')
+    parser.add_argument('--results_dir', default='/content/results')
     args = parser.parse_args()
 
     strategy, using_tpu = configure_tpu()
