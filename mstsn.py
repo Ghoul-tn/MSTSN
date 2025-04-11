@@ -11,7 +11,6 @@ class AdaptiveAdjacency(layers.Layer):
             trainable=True
         )
     
-    @tf.function
     def call(self, batch_size):
         norm_embed = tf.math.l2_normalize(self.embedding, axis=-1)
         adj = tf.matmul(norm_embed, norm_embed, transpose_b=True)
@@ -22,28 +21,18 @@ class VectorizedGAT(layers.Layer):
         super().__init__()
         self.gat = GATConv(out_dim//heads, heads=heads, concat=True)
         
-    @tf.function
+    def build(self, input_shape):
+        # Properly initialize the GAT layer
+        self.gat.build([input_shape[0], (None, None)])
+        super().build(input_shape)
+        
     def call(self, inputs):
         x, adj = inputs
-        batch_size = tf.shape(x)[0]
-        
-        # Process all batches using vectorized operations
-        edge_indices = tf.where(adj > 0.5)
-        batch_indices = edge_indices[:, 0]
-        edges = edge_indices[:, 1:]
-        
-        # Gather features for all edges
-        node_features = tf.gather_nd(x, edges)
-        
-        # Apply GAT (simplified for demonstration)
-        outputs = self.gat([node_features, edges])
-        
-        # Reconstruct batch outputs
-        return tf.scatter_nd(
-            indices=edges,
-            updates=outputs,
-            shape=tf.shape(x)
-        )
+        # Convert adjacency matrix to edge index format
+        edge_index = tf.where(adj > 0.5)
+        # Ensure proper dtype casting
+        edge_index = tf.cast(edge_index, tf.int64)
+        return self.gat([x, edge_index])
 
 class SpatialProcessor(Model):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
@@ -53,7 +42,6 @@ class SpatialProcessor(Model):
         self.gat2 = VectorizedGAT(out_dim)
         self.proj = layers.Dense(hidden_dim)
         
-    @tf.function
     def call(self, x):
         batch_size = tf.shape(x)[0]
         adj = self.adaptive_adj(batch_size)
@@ -73,7 +61,6 @@ class EfficientTransformer(layers.Layer):
         self.layernorm2 = layers.LayerNormalization()
         self.num_layers = num_layers
         
-    @tf.function
     def call(self, x):
         for _ in range(self.num_layers):
             attn_out = self.attention(x, x)
@@ -85,23 +72,34 @@ class EfficientTransformer(layers.Layer):
 class EnhancedMSTSN(Model):
     def __init__(self, num_nodes):
         super().__init__()
-        self.spatial = SpatialProcessor(num_nodes, 3, 16, 32)
-        self.temporal = EfficientTransformer(32, 2, 64)
+        self.spatial = SpatialProcessor(num_nodes, 3, 8, 16)  # Reduced dimensions
+        self.temporal = EfficientTransformer(16, 2, 32)
         self.regressor = tf.keras.Sequential([
             layers.Dense(16, activation='gelu'),
             layers.Dense(1)
         ])
         
-    @tf.function
-    def call(self, inputs):
-        # Vectorized spatial processing
-        batch_size, seq_len = tf.shape(inputs)[0], tf.shape(inputs)[1]
-        spatial_in = tf.reshape(inputs, [batch_size*seq_len, -1, 3])
-        spatial_out = tf.reshape(self.spatial(spatial_in), [batch_size, seq_len, -1, 32])
+    def build(self, input_shape):
+        # Initialize with example input
+        example_input = tf.ones(input_shape)
+        self.call(example_input)
+        super().build(input_shape)
         
-        # Temporal processing
-        temporal_in = tf.reshape(spatial_out, [batch_size*tf.shape(spatial_out)[2], seq_len, 32])
-        temporal_out = tf.reshape(self.temporal(temporal_in), [batch_size, -1, seq_len, 32])
+    def call(self, inputs):
+        # Input: [batch, seq_len, nodes, features]
+        batch_size = tf.shape(inputs)[0]
+        seq_len = tf.shape(inputs)[1]
+        num_nodes = tf.shape(inputs)[2]
+        
+        # Spatial Processing
+        spatial_in = tf.reshape(inputs, [batch_size*seq_len, num_nodes, 3])
+        spatial_out = self.spatial(spatial_in)
+        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, num_nodes, 16])
+        
+        # Temporal Processing
+        temporal_in = tf.reshape(spatial_out, [batch_size*num_nodes, seq_len, 16])
+        temporal_out = self.temporal(temporal_in)
+        temporal_out = tf.reshape(temporal_out, [batch_size, num_nodes, seq_len, 16])
         
         # Prediction
         return self.regressor(tf.reduce_mean(temporal_out, axis=2))[..., 0]
