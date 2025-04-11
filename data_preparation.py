@@ -24,7 +24,7 @@ class GambiaDataProcessor:
         lst = self.data['LST']
 
         # Create base mask from soil moisture (2139 valid pixels)
-        base_mask = (~np.isnan(soil).all(axis=0)
+        base_mask = (~np.isnan(soil).all(axis=0))
         
         # Identify LST NaNs within base mask
         lst_nan_mask = np.isnan(lst).any(axis=0)
