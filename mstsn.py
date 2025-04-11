@@ -34,36 +34,40 @@ class AdaptiveAdjacency(layers.Layer):
 class BatchedGAT(layers.Layer):
     def __init__(self, out_dim, heads=4):
         super().__init__()
-        self.gat = GATConv(out_dim//heads, heads=heads, concat=True, 
-                          attn_kernel_initializer='glorot_uniform')
+        self.gat = GATConv(
+            out_dim // heads,
+            heads=heads,
+            concat=True,
+            attn_kernel_initializer='glorot_uniform',
+            use_mask=False  # Disable mask to prevent None error
+        )
         
     @tf.function
     def call(self, inputs):
         x, adj = inputs
         batch_size = tf.shape(x)[0]
-        
-        # Process each batch item individually
         outputs = []
+        
         for b in range(batch_size):
-            # Convert dense adjacency to edge indices
-            if tf.rank(adj) == 3:  # If adj is [batch, nodes, nodes]
+            # Extract edges for this batch
+            if tf.rank(adj) == 3:
                 edges = tf.where(adj[b] > 0.5)
-            else:  # If adj is already [nodes, nodes]
+            else:
                 edges = tf.where(adj > 0.5)
-                
-            # Ensure edge indices are properly formatted for GATConv
-            x_b = x[b]  # Shape [nodes, features]
             
-            # Add self-loops if none exist (with int64 dtype)
-            if tf.shape(edges)[0] == 0:
+            edges = tf.cast(edges, tf.int32)  # Ensure int32 dtype
+            
+            x_b = x[b]
+            
+            # Handle empty edges by adding self-loops
+            if tf.equal(tf.shape(edges)[0], 0):
                 num_nodes = tf.shape(x_b)[0]
-                indices = tf.range(num_nodes, dtype=tf.int64)  # Cast to int64
+                indices = tf.range(num_nodes, dtype=tf.int32)
                 self_loops = tf.stack([indices, indices], axis=1)
                 edges = self_loops
                 
             outputs.append(self.gat([x_b, edges]))
         
-        # Stack back to batch format
         return tf.stack(outputs)
 
 class SpatialProcessor(Model):
