@@ -220,14 +220,17 @@ def main():
     
     # Model configuration
     with strategy.scope():
-        # Initialize with correct number of nodes
-        model = EnhancedMSTSN(num_nodes=2139)  # From your data validation
-        model = tf.keras.Model(inputs=build_model().inputs, outputs=build_model().outputs)
+        model = EnhancedMSTSN(num_nodes=2152)
+        
+        # Explicitly build with concrete shapes
         model.build(input_shape=(None, 12, 2152, 3))
+        
+        # Verify with dummy input
+        dummy_input = tf.random.normal([2, 12, 2152, 3])
+        dummy_output = model(dummy_input)
+        print(f"Dummy output shape: {dummy_output.shape}")  # Should be (2, 2152)
         model.summary()
-        # dummy_x = tf.random.normal([2, 12, 2152, 3])
-        # dummy_y = model(dummy_x)
-        print(dummy_y.shape)
+
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
