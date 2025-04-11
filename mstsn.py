@@ -5,6 +5,8 @@ from spektral.layers import GATConv
 class AdaptiveAdjacency(layers.Layer):
     def __init__(self, num_nodes, hidden_dim):
         super().__init__()
+        self.num_nodes = num_nodes
+        self.hidden_dim = hidden_dim
         self.embeddings = self.add_weight(
             shape=(num_nodes, hidden_dim),
             initializer='glorot_uniform',
@@ -12,15 +14,10 @@ class AdaptiveAdjacency(layers.Layer):
         )
         
     def call(self):
-        # Cosine similarity with sparsity
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
-        sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
+        adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
+        return tf.nn.sigmoid(adj) * (1 - tf.eye(self.num_nodes))
         
-        # Keep top-k connections per node
-        k = 20  # Number of neighbors per node
-        values, indices = tf.math.top_k(sim_matrix, k=k)
-        return tf.nn.sigmoid(values) * (1 - tf.eye(tf.shape(sim_matrix)[0]))
-
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
         super().__init__()
@@ -28,30 +25,25 @@ class SpatialProcessor(layers.Layer):
         self.adj_layer = AdaptiveAdjacency(num_nodes, 16)
         self.gat1 = GATConv(gat_units, attn_heads=4, concat_heads=True)
         self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
-        
-    def build(self, input_shape):
-        # Generate sparse adjacency matrix
-        self.adj_matrix = self.adj_layer()
-        
-        # Convert to edge indices with top-k connections
-        edge_indices = tf.where(self.adj_matrix > 0.5)  # Higher threshold
-        self.edge_indices = tf.cast(edge_indices, tf.int32)
-        
-        # Add self-loops with matching dtype
-        self_loops = tf.range(self.num_nodes, dtype=tf.int32)
-        self_loops = tf.stack([self_loops, self_loops], axis=1)
-        self.edge_indices = tf.concat(
-            [self.edge_indices, self_loops], 
-            axis=0
-        )
-        super().build(input_shape)
-
-    def compute_output_spec(self, input_shape):
-        return tf.TensorShape([input_shape[0], self.num_nodes, 32])
-
 
     def call(self, inputs):
-        return self.gat2(tf.nn.relu(self.gat1([inputs, self.edge_indices])))
+        # Dynamic adjacency generation
+        adj = self.adj_layer()
+        edge_indices = tf.where(adj > 0.1)
+        edge_indices = tf.cast(edge_indices, tf.int32)
+        
+        # Add self-loops
+        self_loops = tf.range(self.num_nodes, dtype=tf.int32)
+        self_loops = tf.stack([self_loops, self_loops], axis=1)
+        edge_indices = tf.concat([edge_indices, self_loops], axis=0)
+        
+        # GAT processing
+        x = self.gat1([inputs, edge_indices])
+        return self.gat2([tf.nn.relu(x), edge_indices])
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], self.num_nodes, 32)
+        
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim):
         super().__init__()
@@ -76,24 +68,15 @@ class EnhancedMSTSN(Model):
         self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
         self.final_dense = layers.Dense(1)
 
-    def build(self, input_shape):
-        # Initialize with concrete shapes
-        self.spatial.build((None, self.num_nodes, 3))
-        super().build(input_shape)
-
-
     def call(self, inputs):
-                # Maintain static shapes where possible
+        # Input shape: [batch, seq_len, nodes, features]
         batch_size = tf.shape(inputs)[0]
-        seq_len = inputs.shape[1]  # Use static shape if available
+        seq_len = tf.shape(inputs)[1]
         
         # Spatial processing
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
         spatial_out = self.spatial(spatial_in)
-        spatial_out = tf.reshape(
-            spatial_out, 
-            [batch_size, seq_len, self.num_nodes, 32]
-        )
+        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
         
         # Temporal processing
         temporal_in = tf.reshape(spatial_out, [batch_size*self.num_nodes, seq_len, 32])
