@@ -223,9 +223,7 @@ def main():
         model = EnhancedMSTSN(num_nodes=2152)
         # Explicit shape initialization
         model.build(input_shape=(None, 12, 2152, 3))
-        
-        # Verify edge count
-        print(f"Edge count: {model.spatial.edge_indices.shape[0]}")
+    
         model.summary()
 
         optimizer = tf.keras.optimizers.AdamW(
