@@ -238,7 +238,7 @@ def main():
             ],
             steps_per_execution=steps_per_execution
         )
-    
+
     # Callbacks
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
@@ -265,7 +265,19 @@ def main():
             verbose=1
         )
     ]
-    
+    # Explicitly build the model with a sample batch
+    try:
+        print("\nExplicitly building model...")
+        # Create a small sample batch for model building
+        sample_batch = next(iter(train_ds))
+        # Force model building by calling the model
+        _ = model(sample_batch[0])
+        print("Model successfully built!")
+    except Exception as e:
+        print(f"Error during model building: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     # Train model with explicit steps
     try:
         print("\nStarting model training...")
