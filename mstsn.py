@@ -11,10 +11,15 @@ class AdaptiveAdjacency(layers.Layer):
             name='node_embeddings'
         )
         
-    def call(self, inputs=None):  # Remove num_nodes argument
+    def call(self):
+        # Cosine similarity with sparsity
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
-        adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
-        return tf.nn.sigmoid(adj) * (1 - tf.eye(tf.shape(adj)[0]))
+        sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
+        
+        # Keep top-k connections per node
+        k = 20  # Number of neighbors per node
+        values, indices = tf.math.top_k(sim_matrix, k=k)
+        return tf.nn.sigmoid(values) * (1 - tf.eye(tf.shape(sim_matrix)[0]))
 
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
@@ -25,22 +30,25 @@ class SpatialProcessor(layers.Layer):
         self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
         
     def build(self, input_shape):
-        # Generate adjacency matrix
+        # Generate sparse adjacency matrix
         self.adj_matrix = self.adj_layer()
-        edge_indices = tf.where(self.adj_matrix > 0.1)
         
-        # Convert to int32 and cast self-loops
+        # Convert to edge indices with top-k connections
+        edge_indices = tf.where(self.adj_matrix > 0.5)  # Higher threshold
         self.edge_indices = tf.cast(edge_indices, tf.int32)
+        
+        # Add self-loops with matching dtype
         self_loops = tf.range(self.num_nodes, dtype=tf.int32)
         self_loops = tf.stack([self_loops, self_loops], axis=1)
-        self_loops = tf.cast(self_loops, tf.int32)  # Explicit cast
-        
-        # Concatenate with matching dtype
         self.edge_indices = tf.concat(
             [self.edge_indices, self_loops], 
             axis=0
         )
         super().build(input_shape)
+
+    def compute_output_spec(self, input_shape):
+        return tf.TensorShape([input_shape[0], self.num_nodes, 32])
+
 
     def call(self, inputs):
         return self.gat2(tf.nn.relu(self.gat1([inputs, self.edge_indices])))
@@ -69,20 +77,23 @@ class EnhancedMSTSN(Model):
         self.final_dense = layers.Dense(1)
 
     def build(self, input_shape):
-        # Force build spatial processor first
-        dummy_input = tf.keras.Input(shape=(self.num_nodes, 3))
-        self.spatial(dummy_input)
+        # Initialize with concrete shapes
+        self.spatial.build((None, self.num_nodes, 3))
         super().build(input_shape)
 
+
     def call(self, inputs):
-        # Input shape: [batch, seq_len, nodes, features]
+                # Maintain static shapes where possible
         batch_size = tf.shape(inputs)[0]
-        seq_len = tf.shape(inputs)[1]
+        seq_len = inputs.shape[1]  # Use static shape if available
         
         # Spatial processing
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
         spatial_out = self.spatial(spatial_in)
-        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
+        spatial_out = tf.reshape(
+            spatial_out, 
+            [batch_size, seq_len, self.num_nodes, 32]
+        )
         
         # Temporal processing
         temporal_in = tf.reshape(spatial_out, [batch_size*self.num_nodes, seq_len, 32])
