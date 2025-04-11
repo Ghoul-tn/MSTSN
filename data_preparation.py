@@ -27,15 +27,15 @@ class GambiaDataProcessor:
         lst = self.data['LST']
 
         # Create valid pixel mask
+        # Fix valid pixel detection logic
         valid_mask = (
             (~np.isnan(ndvi)).all(axis=0) & 
             (~np.isnan(soil)).all(axis=0) & 
-            (~np.isnan(spi)).all(axis=0) & 
-            (~np.isnan(lst)).all(axis=0)
+            (~np.isnan(lst)).all(axis=0)  # Exclude SPI from validation
         )
         self.valid_pixels = np.where(valid_mask)
-        self.num_nodes = self.valid_pixels
-        print(f"Found {self.num_nodes} valid pixels for processing")
+        self.num_nodes = len(self.valid_pixels[0])
+        print(f"Found {self.num_nodes} valid pixels for processing")  # Should show 2139
 
         # Initialize arrays - now 3D: [time, nodes, features]
         features = np.zeros((287, self.num_nodes, 3), dtype=np.float32)
