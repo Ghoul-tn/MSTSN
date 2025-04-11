@@ -8,13 +8,13 @@ class AdaptiveAdjacency(layers.Layer):
         self.embeddings = self.add_weight(
             shape=(num_nodes, hidden_dim),
             initializer='glorot_uniform',
-            trainable=True
+            name='node_embeddings'
         )
         
-    def call(self, num_nodes):
+    def call(self, inputs=None):  # Remove num_nodes argument
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
         adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
-        return tf.nn.sigmoid(adj) * (1 - tf.eye(num_nodes))  # Remove self-loops
+        return tf.nn.sigmoid(adj) * (1 - tf.eye(tf.shape(adj)[0]))
 
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
@@ -25,19 +25,18 @@ class SpatialProcessor(layers.Layer):
         self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
         
     def build(self, input_shape):
-        # Pre-build adjacency matrix for static shapes
-        self.adj_matrix = self.adj_layer(self.num_nodes)
-        self.edge_indices = tf.where(self.adj_matrix > 0.1)  # Lower threshold
-        self.edge_indices = tf.cast(self.edge_indices, tf.int32)
+        # Generate adjacency matrix without passing num_nodes
+        self.adj_matrix = self.adj_layer()
+        edge_indices = tf.where(self.adj_matrix > 0.1)
+        self.edge_indices = tf.cast(edge_indices, tf.int32)
         
-        # Add self-loops explicitly
+        # Add self-loops
         self_loops = tf.range(self.num_nodes, dtype=tf.int32)
         self_loops = tf.stack([self_loops, self_loops], axis=1)
-        self.edge_indices = tf.concat([self.edge_indices, self_loops], axis=0)
+        self.edge_indices = tf.concat([edge_indices, self_loops], axis=0)
         super().build(input_shape)
 
     def call(self, inputs):
-        # Input shape: [batch*seq_len, nodes, features]
         return self.gat2(tf.nn.relu(self.gat1([inputs, self.edge_indices])))
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim):
