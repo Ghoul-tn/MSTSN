@@ -97,7 +97,7 @@ def main():
         GLOBAL_BATCH_SIZE = args.batch_size * strategy.num_replicas_in_sync
     else:
         GLOBAL_BATCH_SIZE = args.batch_size
-
+    
     # Data loading
     processor = GambiaDataProcessor(args.data_path)
     features, targets = processor.process_data()
@@ -119,7 +119,8 @@ def main():
         model = EnhancedMSTSN(
             num_nodes=processor.num_nodes
         )
-        
+        example_input = tf.ones([GLOBAL_BATCH_SIZE, 12, processor.num_nodes, 3], dtype=tf.float32)
+        _ = model(example_input)  # Explicit build
         # Optimizer with learning rate schedule
         lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
             initial_learning_rate=2e-4,
@@ -162,7 +163,7 @@ def main():
             log_dir=os.path.join(args.results_dir, 'logs')
         )
     ]
-
+    model._set_inputs(example_input)
     # Training
     history = model.fit(
         train_ds,
