@@ -225,8 +225,8 @@ def main():
         model = tf.keras.Model(inputs=build_model().inputs, outputs=build_model().outputs)
         model.build(input_shape=(None, 12, 2152, 3))
         model.summary()
-        dummy_x = tf.random.normal([2, 12, 2152, 3])
-        dummy_y = model(dummy_x)
+        # dummy_x = tf.random.normal([2, 12, 2152, 3])
+        # dummy_y = model(dummy_x)
         print(dummy_y.shape)
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
