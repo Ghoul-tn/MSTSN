@@ -11,12 +11,11 @@ class GambiaDataProcessor:
         self.valid_pixels = None
         self.num_nodes = None  # Store number of nodes instead of full adjacency matrix
         self.scalers = {
-            'ndvi': MinMaxScaler(feature_range=(0, 1)),
+            'ndvi': MinMaxScaler(),
             'soil': StandardScaler(),
             'lst': StandardScaler(),
-            'spi': QuantileTransformer(output_distribution='normal', n_quantiles=1000)
+            'spi': QuantileTransformer()  # Don't use 'normal' output for SPI
         }
-
     def process_data(self):
         """Process and normalize all input data, returns NumPy arrays"""
         print("\n=== Loading and Processing Raw Data ===")
