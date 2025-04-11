@@ -5,118 +5,77 @@ from spektral.layers import GATConv
 class AdaptiveAdjacency(layers.Layer):
     def __init__(self, num_nodes, hidden_dim):
         super().__init__()
-        self.embedding = self.add_weight(
+        self.embeddings = self.add_weight(
             shape=(num_nodes, hidden_dim),
             initializer='glorot_uniform',
             name='node_embeddings'
         )
-        self.num_nodes = num_nodes
-
-    def call(self, batch_size):
-        # L2 normalization as per spec
-        norm_embed = tf.math.l2_normalize(self.embedding, axis=-1)
-        
-        # Cosine similarity adjacency matrix
-        adj = tf.matmul(norm_embed, norm_embed, transpose_b=True)
-        
-        # Remove self-loops and ensure connectivity
-        adj = adj * (1.0 - tf.eye(self.num_nodes))
-        
-        # Create batch dimension
-        return tf.tile(tf.expand_dims(adj, 0), [batch_size, 1, 1])
-
-class SpatialGAT(layers.Layer):
-    def __init__(self, out_dim, heads=4):
-        super().__init__()
-        self.gat = GATConv(
-            out_dim // heads,
-            heads=heads,
-            concat=True,
-            attn_kernel_initializer='glorot_uniform',
-            use_mask=False  # Disable mask support
-        )
         
     def call(self, inputs):
-        x, adj = inputs
-        x = self.gat([x, adj])
-        return x
+        # Cosine similarity adjacency
+        norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
+        adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
+        adj = tf.nn.sigmoid(adj)  # Ensure values 0-1
+        return adj
 
-class SpatialProcessor(Model):
-    def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
+class SpatialProcessor(layers.Layer):
+    def __init__(self, num_nodes, gat_units):
         super().__init__()
-        self.adaptive_adj = AdaptiveAdjacency(num_nodes, hidden_dim)
-        self.proj = layers.Dense(hidden_dim)
+        self.adj_layer = AdaptiveAdjacency(num_nodes, 16)
+        self.gat1 = GATConv(gat_units, attn_heads=4, concat_heads=True)
+        self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
         
-        # GAT layers as per architecture spec
-        self.gat1 = SpatialGAT(hidden_dim)
-        self.gat2 = SpatialGAT(out_dim)
+    def call(self, inputs):
+        # Input shape: [batch*seq_len, nodes, features]
+        adj = self.adj_layer(inputs)
+        
+        # Convert adj matrix to edge indices
+        edge_indices = tf.where(adj > 0.3)  # Adjust threshold as needed
+        edge_indices = tf.cast(edge_indices, tf.int32)
+        
+        # Add self-loops if no edges
+        if edge_indices.shape[0] == 0:
+            num_nodes = adj.shape[0]
+            edge_indices = tf.reshape(tf.range(num_nodes, dtype=tf.int32), (-1, 1))
+            edge_indices = tf.repeat(edge_indices, 2, axis=1)
+        
+        # GAT processing
+        x = self.gat1([inputs, edge_indices])
+        x = tf.nn.relu(x)
+        return self.gat2([x, edge_indices])
 
-    def call(self, x):
-        batch_size = tf.shape(x)[0]
-        adj = self.adaptive_adj(batch_size)
-        
-        # Project input features
-        x = self.proj(x)  # [batch_size, num_nodes, hidden_dim]
-        
-        # First GAT layer with ReLU
-        x = tf.nn.relu(self.gat1([x, adj]))
-        
-        # Second GAT layer
-        return self.gat2([x, adj])
-
-class TemporalTransformer(Model):
-    def __init__(self, input_dim, num_heads, ff_dim, num_layers=1):
+class TemporalTransformer(layers.Layer):
+    def __init__(self, num_heads, ff_dim):
         super().__init__()
-        self.attention = layers.MultiHeadAttention(num_heads, input_dim//num_heads)
+        self.attn = layers.MultiHeadAttention(num_heads, 32)
         self.ffn = tf.keras.Sequential([
             layers.Dense(ff_dim, activation='gelu'),
-            layers.Dense(input_dim)
+            layers.Dense(32)
         ])
         self.layernorm1 = layers.LayerNormalization()
         self.layernorm2 = layers.LayerNormalization()
-        self.dropout = layers.Dropout(0.1)
-
-    def call(self, x):
-        # Transformer block as per spec
-        attn_output = self.attention(x, x)
-        x = self.layernorm1(x + self.dropout(attn_output))
-        ffn_output = self.ffn(x)
-        return self.layernorm2(x + self.dropout(ffn_output))
+        
+    def call(self, inputs):
+        x = self.layernorm1(inputs + self.attn(inputs, inputs))
+        return self.layernorm2(x + self.ffn(x))
 
 class EnhancedMSTSN(Model):
     def __init__(self, num_nodes):
         super().__init__()
-        # Spatial processor parameters from spec
-        self.spatial = SpatialProcessor(
-            num_nodes=num_nodes,
-            in_dim=3,       # NDVI, Soil, LST features
-            hidden_dim=16,
-            out_dim=32
-        )
+        self.spatial = SpatialProcessor(num_nodes, 32)
+        self.temporal = TemporalTransformer(num_heads=2, ff_dim=64)
+        self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
+        self.final_dense = layers.Dense(1)
         
-        # Temporal processor parameters from spec
-        self.temporal = TemporalTransformer(
-            input_dim=32,
-            num_heads=2,
-            ff_dim=64
-        )
-        
-        # Cross-attention and regressor
-        self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=16)
-        self.regressor = tf.keras.Sequential([
-            layers.Dense(16, activation='gelu'),
-            layers.Dense(1)
-        ])
-
     def call(self, inputs):
-        # Input: [batch, seq_len, nodes, features]
+        # Original input: [batch, seq_len, nodes, features]
         batch_size = tf.shape(inputs)[0]
         seq_len = tf.shape(inputs)[1]
         num_nodes = tf.shape(inputs)[2]
         
-        # Spatial processing (all time steps)
-        spatial_input = tf.reshape(inputs, [-1, num_nodes, 3])
-        spatial_out = self.spatial(spatial_input)
+        # Spatial processing
+        spatial_in = tf.reshape(inputs, [-1, num_nodes, 3])
+        spatial_out = self.spatial(spatial_in)
         spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, num_nodes, 32])
         
         # Temporal processing
@@ -124,10 +83,10 @@ class EnhancedMSTSN(Model):
         temporal_out = self.temporal(temporal_in)
         temporal_out = tf.reshape(temporal_out, [batch_size, num_nodes, seq_len, 32])
         
-        # Cross-attention fusion
+        # Cross-attention
         spatial_feats = tf.reduce_mean(spatial_out, axis=1)
         temporal_feats = tf.reduce_mean(temporal_out, axis=2)
         fused = self.cross_attn(spatial_feats, temporal_feats)
         
-        # Final prediction
-        return self.regressor(fused)[..., 0]
+        # Prediction
+        return self.final_dense(tf.reduce_mean(fused, axis=1))
