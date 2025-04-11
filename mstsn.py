@@ -25,15 +25,21 @@ class SpatialProcessor(layers.Layer):
         self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
         
     def build(self, input_shape):
-        # Generate adjacency matrix without passing num_nodes
+        # Generate adjacency matrix
         self.adj_matrix = self.adj_layer()
         edge_indices = tf.where(self.adj_matrix > 0.1)
-        self.edge_indices = tf.cast(edge_indices, tf.int32)
         
-        # Add self-loops
+        # Convert to int32 and cast self-loops
+        self.edge_indices = tf.cast(edge_indices, tf.int32)
         self_loops = tf.range(self.num_nodes, dtype=tf.int32)
         self_loops = tf.stack([self_loops, self_loops], axis=1)
-        self.edge_indices = tf.concat([edge_indices, self_loops], axis=0)
+        self_loops = tf.cast(self_loops, tf.int32)  # Explicit cast
+        
+        # Concatenate with matching dtype
+        self.edge_indices = tf.concat(
+            [self.edge_indices, self_loops], 
+            axis=0
+        )
         super().build(input_shape)
 
     def call(self, inputs):
