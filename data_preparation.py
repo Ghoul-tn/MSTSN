@@ -3,9 +3,9 @@ import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer
 from scipy.interpolate import interp1d
 
+# Modified GambiaDataProcessor in data_preparation.py
 class GambiaDataProcessor:
     def __init__(self, data_path):
-        print(f"\nInitializing DataProcessor with data from: {data_path}")
         self.data = np.load(data_path)
         self.valid_pixels = None
         self.num_nodes = None
@@ -13,43 +13,57 @@ class GambiaDataProcessor:
             'ndvi': MinMaxScaler(feature_range=(0, 1)),
             'soil': StandardScaler(),
             'lst': StandardScaler(),
-            'spi': QuantileTransformer(output_distribution='normal', n_quantiles=1000)
+            'spi': QuantileTransformer(output_distribution='normal')
         }
 
     def process_data(self):
-        """Process and normalize all input data, returns NumPy arrays"""
-        print("\n=== Loading and Processing Raw Data ===")
-        
         # Load raw data
         ndvi = self.data['NDVI']
         soil = self.data['SoilMoisture']
         spi = self.data['SPI']
         lst = self.data['LST']
 
-        # Create valid pixel mask from SPI (same as your transformer code)
-        valid_mask = ~np.isnan(spi[0])  # Use SPI's mask
-        self.valid_pixels = np.where(valid_mask)
-        self.num_nodes = valid_mask.sum()  # Should be 2139
-        print(f"Found {self.num_nodes} valid pixels for processing")
+        # Create base mask from soil moisture (2139 valid pixels)
+        base_mask = (~np.isnan(soil).all(axis=0)
+        
+        # Identify LST NaNs within base mask
+        lst_nan_mask = np.isnan(lst).any(axis=0)
+        combined_mask = base_mask & ~lst_nan_mask
+        
+        # Final valid pixels (2139 - LST NaNs)
+        self.valid_pixels = np.where(combined_mask)
+        self.num_nodes = combined_mask.sum()
+        print(f"Final valid pixels considering Soil+LST: {self.num_nodes}")
 
-        # Initialize arrays - [time, nodes, features]
-        features = np.zeros((287, self.num_nodes, 3), dtype=np.float32)
-        targets = np.zeros((287, self.num_nodes), dtype=np.float32)
+        # Initialize arrays
+        features = np.zeros((287, self.num_nodes, 3), dtype=np.float32)  # NDVI, Soil, LST
+        targets = np.zeros((287, self.num_nodes), dtype=np.float32)  # SPI
 
         # Extract valid pixels
         y_idx, x_idx = self.valid_pixels
         for t in range(287):
-            # Handle NaNs in features
-            features[t, :, 0] = np.nan_to_num(ndvi[t, y_idx, x_idx], nan=0.0)
-            features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
-            features[t, :, 2] = np.nan_to_num(lst[t, y_idx, x_idx], nan=0.0)
+            # Direct assignment for NDVI and Soil
+            features[t, :, 0] = ndvi[t, y_idx, x_idx]
+            features[t, :, 1] = soil[t, y_idx, x_idx]
+            
+            # LST with interpolation
+            lst_slice = lst[t, y_idx, x_idx]
+            if np.isnan(lst_slice).any():
+                # Temporal interpolation for LST
+                valid_times = [i for i in range(287) if not np.isnan(lst[i, y_idx, x_idx]).any()]
+                f = interp1d(valid_times, lst[valid_times, y_idx, x_idx], 
+                            axis=0, fill_value="extrapolate")
+                lst_slice = f(t)
+            features[t, :, 2] = lst_slice
+
+            # Targets (SPI)
             targets[t, :] = spi[t, y_idx, x_idx]
 
         # Apply normalizations
-        features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, self.num_nodes)
-        features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, self.num_nodes)
-        features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, self.num_nodes)
-        targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, self.num_nodes)
+        features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, -1)
+        features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, -1)
+        features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, -1)
+        targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, -1)
 
         return features, targets
 
