@@ -34,7 +34,7 @@ class GambiaDataProcessor:
             (~np.isnan(lst)).all(axis=0)
         )
         self.valid_pixels = np.where(valid_mask)
-        self.num_nodes = len(self.valid_pixels[0])
+        self.num_nodes = self.valid_pixels
         print(f"Found {self.num_nodes} valid pixels for processing")
 
         # Initialize arrays - now 3D: [time, nodes, features]
