@@ -218,13 +218,9 @@ def main():
     # Model configuration
     with strategy.scope():
         # Initialize with correct number of nodes
-        # model = EnhancedMSTSN(num_nodes=2139)  # From your data validation
-        # model.build(input_shape=(None, 12, 2139, 3))  # [batch, seq_len, nodes, features]
-        # model.summary()
-        model = EnhancedMSTSN(num_nodes=3)  # Match your valid_pixels count
-        dummy_input = tf.random.normal((2, 12, 3, 3))  # [batch, seq_len, nodes, features]
-        output = model(dummy_input)
-        print(output.shape)  # Should be (2, 1)        
+        model = EnhancedMSTSN(num_nodes=2139)  # From your data validation
+        model.build(input_shape=(None, 12, 2139, 3))  # [batch, seq_len, nodes, features]
+        model.summary()        
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
