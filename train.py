@@ -221,14 +221,11 @@ def main():
     # Model configuration
     with strategy.scope():
         model = EnhancedMSTSN(num_nodes=2152)
-        
-        # Explicitly build with concrete shapes
+        # Explicit shape initialization
         model.build(input_shape=(None, 12, 2152, 3))
         
-        # Verify with dummy input
-        dummy_input = tf.random.normal([2, 12, 2152, 3])
-        dummy_output = model(dummy_input)
-        print(f"Dummy output shape: {dummy_output.shape}")  # Should be (2, 2152)
+        # Verify edge count
+        print(f"Edge count: {model.spatial.edge_indices.shape[0]}")
         model.summary()
 
         optimizer = tf.keras.optimizers.AdamW(
