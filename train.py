@@ -29,7 +29,7 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         
         # Drought RMSE
         squared_errors = tf.square(y_true - y_pred) * drought_mask
-        self.drought_rmse.assign_add(tf.sqrt(tf.reduce_sum(squared_errors) / tf.maximum(tf.reduce_sum(drought_mask), 1e-7))
+        self.drought_rmse.assign_add(tf.sqrt(tf.reduce_sum(squared_errors) / tf.maximum(tf.reduce_sum(drought_mask), 1e-7)))
         
         # False alarms
         false_alarms = tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32)
