@@ -117,10 +117,7 @@ def main():
     with strategy.scope():
         # Model with reduced dimensions for TPU
         model = EnhancedMSTSN(
-            num_nodes=processor.num_nodes,
-            spatial_hidden_dim=8,    # Reduced from 16
-            temporal_ff_dim=32,      # Reduced from 64
-            temporal_heads=1         # Reduced from 2
+            num_nodes=processor.num_nodes
         )
         
         # Optimizer with learning rate schedule
