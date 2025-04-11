@@ -22,17 +22,31 @@ class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
         super().__init__()
         self.num_nodes = num_nodes
+        self.gat_units = gat_units
         self.adj_layer = AdaptiveAdjacency(num_nodes, 16)
         self.gat1 = GATConv(gat_units, attn_heads=4, concat_heads=True)
         self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
 
+    def build(self, input_shape):
+        # Initialize GAT layers with concrete input shape
+        dummy_features = tf.keras.Input(shape=(self.num_nodes, 3))
+        dummy_edges = tf.keras.Input(shape=(None, 2), dtype=tf.int32)
+        
+        # Force build GAT layers
+        _ = self.gat1([dummy_features, dummy_edges])
+        _ = self.gat2([dummy_features, dummy_edges])
+        
+        super().build(input_shape)
+
     def call(self, inputs):
-        # Dynamic adjacency generation
+        # Generate adjacency matrix
         adj = self.adj_layer()
-        edge_indices = tf.where(adj > 0.1)
+        
+        # Create edge indices with self-loops
+        edge_indices = tf.where(adj > 0.5)
         edge_indices = tf.cast(edge_indices, tf.int32)
         
-        # Add self-loops
+        # Add guaranteed self-connections
         self_loops = tf.range(self.num_nodes, dtype=tf.int32)
         self_loops = tf.stack([self_loops, self_loops], axis=1)
         edge_indices = tf.concat([edge_indices, self_loops], axis=0)
@@ -42,7 +56,7 @@ class SpatialProcessor(layers.Layer):
         return self.gat2([tf.nn.relu(x), edge_indices])
 
     def compute_output_shape(self, input_shape):
-        return (input_shape[0], self.num_nodes, 32)
+        return (input_shape[0], self.num_nodes, self.gat_units)
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim):
@@ -68,20 +82,34 @@ class EnhancedMSTSN(Model):
         self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
         self.final_dense = layers.Dense(1)
 
+    def build(self, input_shape):
+        # Explicitly build spatial processor first
+        self.spatial.build((None, self.num_nodes, 3))
+        super().build(input_shape)
+
     def call(self, inputs):
         # Input shape: [batch, seq_len, nodes, features]
         batch_size = tf.shape(inputs)[0]
-        seq_len = tf.shape(inputs)[1]
+        seq_len = inputs.shape[1] or tf.shape(inputs)[1]
         
         # Spatial processing
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
         spatial_out = self.spatial(spatial_in)
-        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
+        spatial_out = tf.reshape(
+            spatial_out, 
+            [batch_size, seq_len, self.num_nodes, 32]
+        )
         
         # Temporal processing
-        temporal_in = tf.reshape(spatial_out, [batch_size*self.num_nodes, seq_len, 32])
+        temporal_in = tf.reshape(
+            spatial_out, 
+            [batch_size * self.num_nodes, seq_len, 32]
+        )
         temporal_out = self.temporal(temporal_in)
-        temporal_out = tf.reshape(temporal_out, [batch_size, self.num_nodes, seq_len, 32])
+        temporal_out = tf.reshape(
+            temporal_out, 
+            [batch_size, self.num_nodes, seq_len, 32]
+        )
         
         # Cross-attention
         spatial_feats = tf.reduce_mean(spatial_out, axis=1)
