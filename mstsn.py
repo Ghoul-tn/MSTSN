@@ -15,8 +15,7 @@ class AdaptiveAdjacency(layers.Layer):
         # Cosine similarity adjacency
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
         adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
-        adj = tf.nn.sigmoid(adj)  # Ensure values 0-1
-        return adj
+        return tf.nn.sigmoid(adj) * (1 - tf.eye(tf.shape(adj)[0]))  # Remove self-loops
 
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
@@ -27,17 +26,20 @@ class SpatialProcessor(layers.Layer):
         
     def call(self, inputs):
         # Input shape: [batch*seq_len, nodes, features]
-        adj = self.adj_layer(inputs)
+        batch_seq = tf.shape(inputs)[0]
+        nodes = tf.shape(inputs)[1]
         
-        # Convert adj matrix to edge indices
-        edge_indices = tf.where(adj > 0.3)  # Adjust threshold as needed
+        # Generate adjacency matrix
+        adj = self.adj_layer(inputs)  # Shape [nodes, nodes]
+        
+        # Convert to edge indices with threshold
+        edge_indices = tf.where(adj > 0.5)
         edge_indices = tf.cast(edge_indices, tf.int32)
         
-        # Add self-loops if no edges
-        if edge_indices.shape[0] == 0:
-            num_nodes = adj.shape[0]
-            edge_indices = tf.reshape(tf.range(num_nodes, dtype=tf.int32), (-1, 1))
-            edge_indices = tf.repeat(edge_indices, 2, axis=1)
+        # Add self-loops explicitly for stability
+        self_loops = tf.range(nodes, dtype=tf.int32)
+        self_loops = tf.stack([self_loops, self_loops], axis=1)
+        edge_indices = tf.concat([edge_indices, self_loops], axis=0)
         
         # GAT processing
         x = self.gat1([inputs, edge_indices])
