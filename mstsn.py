@@ -16,30 +16,42 @@ class AdaptiveAdjacency(layers.Layer):
         adj = tf.matmul(norm_embed, norm_embed, transpose_b=True)
         return tf.tile(tf.expand_dims(adj, 0), [batch_size, 1, 1])
 
-class VectorizedGAT(layers.Layer):
+class BatchedGAT(layers.Layer):
     def __init__(self, out_dim, heads=4):
         super().__init__()
         self.gat = GATConv(out_dim//heads, heads=heads, concat=True)
         
-    def build(self, input_shape):
-        # Properly initialize the GAT layer
-        self.gat.build([input_shape[0], (None, None)])
-        super().build(input_shape)
-        
     def call(self, inputs):
         x, adj = inputs
-        # Convert adjacency matrix to edge index format
-        edge_index = tf.where(adj > 0.5)
-        # Ensure proper dtype casting
-        edge_index = tf.cast(edge_index, tf.int64)
-        return self.gat([x, edge_index])
+        batch_size = tf.shape(x)[0]
+        num_nodes = tf.shape(x)[1]
+        
+        # Reshape for batch processing
+        x_flat = tf.reshape(x, [-1, x.shape[-1]])
+        adj_flat = tf.reshape(adj, [-1, num_nodes])
+        
+        # Create edge indices for all batches
+        edge_indices = tf.where(adj_flat > 0.5)
+        
+        # Convert to single graph with multiple disconnected components
+        offsets = tf.range(batch_size) * num_nodes
+        edge_indices = tf.concat([
+            edge_indices[:, :1] + offsets,  # Add batch offsets
+            edge_indices[:, 1:] + offsets
+        ], axis=1)
+        
+        # Apply GAT to combined graph
+        out = self.gat([x_flat, edge_indices])
+        
+        # Reshape back to batch format
+        return tf.reshape(out, [batch_size, num_nodes, -1])
 
 class SpatialProcessor(Model):
     def __init__(self, num_nodes, in_dim, hidden_dim, out_dim):
         super().__init__()
         self.adaptive_adj = AdaptiveAdjacency(num_nodes, hidden_dim)
-        self.gat1 = VectorizedGAT(hidden_dim)
-        self.gat2 = VectorizedGAT(out_dim)
+        self.gat1 = BatchedGAT(hidden_dim)
+        self.gat2 = BatchedGAT(out_dim)
         self.proj = layers.Dense(hidden_dim)
         
     def call(self, x):
@@ -49,41 +61,32 @@ class SpatialProcessor(Model):
         x = tf.nn.gelu(self.gat1([x, adj]))
         return self.gat2([x, adj])
 
-class EfficientTransformer(layers.Layer):
-    def __init__(self, dim, heads, ff_dim, num_layers=1):
+class TemporalTransformer(layers.Layer):
+    def __init__(self, dim, heads, ff_dim):
         super().__init__()
         self.attention = layers.MultiHeadAttention(heads, dim//heads)
         self.ffn = tf.keras.Sequential([
             layers.Dense(ff_dim, activation='gelu'),
             layers.Dense(dim)
         ])
-        self.layernorm1 = layers.LayerNormalization()
-        self.layernorm2 = layers.LayerNormalization()
-        self.num_layers = num_layers
+        self.norm1 = layers.LayerNormalization()
+        self.norm2 = layers.LayerNormalization()
         
     def call(self, x):
-        for _ in range(self.num_layers):
-            attn_out = self.attention(x, x)
-            x = self.layernorm1(x + attn_out)
-            ffn_out = self.ffn(x)
-            x = self.layernorm2(x + ffn_out)
-        return x
+        attn_out = self.attention(x, x)
+        x = self.norm1(x + attn_out)
+        ffn_out = self.ffn(x)
+        return self.norm2(x + ffn_out)
 
 class EnhancedMSTSN(Model):
     def __init__(self, num_nodes):
         super().__init__()
-        self.spatial = SpatialProcessor(num_nodes, 3, 8, 16)  # Reduced dimensions
-        self.temporal = EfficientTransformer(16, 2, 32)
+        self.spatial = SpatialProcessor(num_nodes, 3, 8, 16)
+        self.temporal = TemporalTransformer(16, 2, 32)
         self.regressor = tf.keras.Sequential([
             layers.Dense(16, activation='gelu'),
             layers.Dense(1)
         ])
-        
-    def build(self, input_shape):
-        # Initialize with example input
-        example_input = tf.ones(input_shape)
-        self.call(example_input)
-        super().build(input_shape)
         
     def call(self, inputs):
         # Input: [batch, seq_len, nodes, features]
