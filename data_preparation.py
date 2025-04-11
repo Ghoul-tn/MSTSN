@@ -96,3 +96,18 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=32, training=Fal
     ).batch(batch_size, drop_remainder=True) \
      .prefetch(tf.data.AUTOTUNE) \
      .cache()
+    def train_val_split(features, targets, train_ratio=0.8):
+        """Temporal split of dataset with sequence awareness"""
+        seq_len = 12  # Match your sequence length
+        total_sequences = features.shape[0] - seq_len
+        split_idx = int(total_sequences * train_ratio)
+        
+        # Training data (include full sequence window)
+        train_features = features[:split_idx + seq_len]
+        train_targets = targets[:split_idx + seq_len]
+        
+        # Validation data
+        val_features = features[split_idx:]
+        val_targets = targets[split_idx:]
+        
+        return (train_features, train_targets), (val_features, val_targets)
