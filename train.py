@@ -219,7 +219,7 @@ def main():
     with strategy.scope():
         # Initialize with correct number of nodes
         model = EnhancedMSTSN(num_nodes=2139)  # From your data validation
-        model.build(input_shape=(None, 12, 2139, 3))  # [batch, seq_len, nodes, features]
+        model.build(input_shape=(None, args.seq_len, processor.num_nodes, 3)) # [batch, seq_len, nodes, features]
         model.summary()        
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
