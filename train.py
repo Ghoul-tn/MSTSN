@@ -8,7 +8,6 @@ from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_s
 from mstsn import EnhancedMSTSN
 
 
-
 class DroughtMetrics(tf.keras.metrics.Metric):
     def __init__(self, name='drought_metrics', **kwargs):
         super().__init__(name=name, **kwargs)
@@ -86,20 +85,19 @@ def parse_args():
     return parser.parse_args()
 
 def configure_tpu():
-# TPU initialization with enhanced configuration
+    # TPU initialization with enhanced configuration
     try:
         tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
         tf.config.experimental_connect_to_cluster(tpu)
         tf.tpu.experimental.initialize_tpu_system(tpu)
         strategy = tf.distribute.TPUStrategy(tpu)
         print(f"Running on TPU: {tpu.master()}")
-        USE_TPU = True
+        return strategy, True  # Return strategy and TPU status
     except Exception as e:
         print(f"TPU initialization failed: {e}")
         strategy = tf.distribute.get_strategy()
-        USE_TPU = False
         print("Using CPU/GPU strategy")
-    
+        return strategy, False  # Return strategy and TPU status
 
 
 # Learning rate scheduler for transformer training
@@ -120,8 +118,8 @@ def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
     
+    # Get strategy and TPU status
     strategy, using_tpu = configure_tpu()
-
 
     # Adjust batch size for TPU
     if using_tpu:
@@ -142,7 +140,7 @@ def main():
     (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
     
     # Create datasets
-    with strategy.scope():  # Fixed: Changed from tpu_strategy to strategy
+    with strategy.scope():
         train_ds = create_tf_dataset(
             train_feat, train_targ,
             seq_len=args.seq_len,
@@ -159,7 +157,7 @@ def main():
     lr_schedule = get_lr_schedule(args.lr)
     
     # Model configuration
-    with strategy.scope():  # Fixed: Changed from tpu_strategy to strategy
+    with strategy.scope():
         model = EnhancedMSTSN(num_nodes=processor.num_nodes)
         
         optimizer = tf.keras.optimizers.AdamW(
@@ -178,7 +176,7 @@ def main():
             steps_per_execution=16  # Critical for TPU performance
         )
     
-    # Callbacks - Fixed: Removed duplicate callbacks
+    # Callbacks
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             patience=15,
@@ -198,14 +196,12 @@ def main():
         )
     ]
     
-    # Fixed: Removed incorrect dataset size calculation
-    # Instead, let TensorFlow determine the steps automatically
-    
+    # Train model
     history = model.fit(
         train_ds,
         epochs=args.epochs,
         validation_data=val_ds,
-        callbacks=callbacks  # Fixed: Using the properly defined callbacks
+        callbacks=callbacks
     )
     
     # Save final model
@@ -215,6 +211,16 @@ def main():
     print("\nTraining completed. Final metrics:")
     print(f"Best validation RMSE: {min(history.history['val_rmse']):.4f}")
     print(f"Best validation MAE: {min(history.history['val_mae']):.4f}")
+    
+    # Additional metrics from DroughtMetrics if available
+    if 'val_drought_metrics' in history.history:
+        drought_metrics = history.history['val_drought_metrics']
+        best_epoch = history.history['val_rmse'].index(min(history.history['val_rmse']))
+        if best_epoch < len(drought_metrics):
+            best_metrics = drought_metrics[best_epoch]
+            print(f"Drought-specific metrics at best epoch:")
+            for key, value in best_metrics.items():
+                print(f"  {key}: {value:.4f}")
 
 if __name__ == "__main__":
     # Enable XLA compilation
