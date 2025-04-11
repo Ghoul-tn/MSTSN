@@ -131,9 +131,7 @@ def debug_dataset(ds, steps=2):
             print("  Dataset exhausted!")
             break
     print("=== End Debug ===\n")
-def build_model():
-    inputs = tf.keras.Input(shape=(None, 2152, 3))  # [batch, seq_len, nodes, features]
-    return EnhancedMSTSN(num_nodes=2152)(inputs)
+
 
 # Learning rate scheduler for transformer training
 def get_lr_schedule(initial_lr, warmup_steps=1000):
@@ -225,7 +223,10 @@ def main():
         model.build(input_shape=(None, 12, 2152, 3))
     
         model.summary()
-
+        # Verify with dummy input
+        dummy_input = tf.random.normal([2, 12, 2152, 3])
+        dummy_output = model(dummy_input)
+        print(f"Verification output shape: {dummy_output.shape}")
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
