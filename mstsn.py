@@ -54,10 +54,10 @@ class BatchedGAT(layers.Layer):
             # Ensure edge indices are properly formatted for GATConv
             x_b = x[b]  # Shape [nodes, features]
             
-            # Add self-loops if none exist
+            # Add self-loops if none exist (with int64 dtype)
             if tf.shape(edges)[0] == 0:
                 num_nodes = tf.shape(x_b)[0]
-                indices = tf.range(num_nodes)
+                indices = tf.range(num_nodes, dtype=tf.int64)  # Cast to int64
                 self_loops = tf.stack([indices, indices], axis=1)
                 edges = self_loops
                 
