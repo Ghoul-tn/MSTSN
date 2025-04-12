@@ -288,7 +288,8 @@ def main():
         
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
-            weight_decay=args.weight_decay
+            weight_decay=args.weight_decay,
+            clipnorm=1.0  
         )
         
         # Compile with reasonable steps_per_execution for TPU
