@@ -9,6 +9,7 @@ class AdaptiveAdjacency(layers.Layer):
         self.embeddings = self.add_weight(
             shape=(num_nodes, hidden_dim),
             initializer='glorot_uniform',
+            trainable=True,  # Ensure it's trainable
             name='node_embeddings'
         )
         
@@ -110,13 +111,14 @@ class SpatialProcessor(layers.Layer):
         adj_matrix = tf.zeros((self.num_nodes, self.num_nodes), dtype=tf.float32)
         
         # For each node, set its connections based on adj_indices
+        # Use scatter_nd updates which should ensure gradient flow
         for i in range(self.num_nodes):
             connections = adj_indices[i]
-            updates = tf.ones_like(connections, dtype=tf.float32)
             indices = tf.stack([
                 tf.ones_like(connections, dtype=tf.int32) * i,
                 connections
             ], axis=1)
+            updates = tf.ones_like(connections, dtype=tf.float32)
             adj_matrix = tf.tensor_scatter_nd_update(adj_matrix, indices, updates)
         
         # Add self-loops
@@ -128,7 +130,7 @@ class SpatialProcessor(layers.Layer):
         x = self.dropout(x, training=training)
         x = self.gat2(x, adj_matrix, training=training)
         
-        return self.layer_norm(x)
+        return self.layer_norm(x + inputs[:,:,0:x.shape[-1]])  # Add a residual connection if possible
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.1):
