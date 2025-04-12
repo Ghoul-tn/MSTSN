@@ -221,7 +221,8 @@ def main():
     print(f"NaN in targets: {np.isnan(targets).sum()}/{targets.size}")
     print(f"Feature range: {features.min()} to {features.max()}")
     print(f"Target range: {targets.min()} to {targets.max()}")
-    
+    # Create static adjacency matrix - this is the key change
+    adj_matrix = processor.create_adjacency_on_demand(threshold=10)
     # Check for minimum viable dataset size
     if processor.num_nodes < 1:
         print("ERROR: No valid pixels found in dataset. Please check your data.")
@@ -284,7 +285,7 @@ def main():
     
     # Model configuration
     with strategy.scope():
-        model = EnhancedMSTSN(num_nodes=processor.num_nodes)
+        model = EnhancedMSTSN(num_nodes=processor.num_nodes, adj_matrix=adj_matrix)
         
         # Create a small dummy input with the correct dimensions for testing
         print("Creating dummy input for model verification...")
