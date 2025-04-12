@@ -266,12 +266,12 @@ def main():
         debug_dataset(train_ds)
     
     # Calculate steps per epoch - with proper estimation for your dataset size
-    time_steps = features.shape[0] - args.seq_len
-    samples_per_step = processor.num_nodes  # Each time point has processor.num_nodes samples
-    total_samples = time_steps * samples_per_step  # Total number of potential samples
+    # Calculate steps per epoch based on temporal sequences, not node count
+    time_steps_train = train_feat.shape[0] - args.seq_len
+    steps_per_epoch = max(1, time_steps_train // args.batch_size)
     
-    steps_per_epoch = max(1, total_samples // (global_batch_size * 100))  # Divide by 100 to make epochs faster
-    validation_steps = max(1, (total_samples // 5) // (global_batch_size * 100))  # 20% for validation
+    time_steps_val = val_feat.shape[0] - args.seq_len
+    validation_steps = max(1, time_steps_val // args.batch_size)
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
@@ -313,7 +313,7 @@ def main():
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
-            clipnorm=1.0  
+            clipvalue=1.0
         )
         
         # Compile with reasonable steps_per_execution for TPU
@@ -361,10 +361,10 @@ def main():
     try:
         print("\nStarting model training...")
         history = model.fit(
-            train_ds.repeat(),  # Important: repeat dataset for TPU training
+            train_ds,  # Remove .repeat()
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
-            validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
+            validation_data=val_ds,
             validation_steps=validation_steps,
             callbacks=callbacks
         )
