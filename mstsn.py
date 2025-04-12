@@ -40,15 +40,21 @@ class GraphAttention(layers.Layer):
         self.key_dense = layers.Dense(output_dim * heads)
         self.value_dense = layers.Dense(output_dim * heads)
         self.dropout_layer = layers.Dropout(dropout)
+        self.debug = False  # Add a debug flag
 
     def call(self, inputs, adj_matrix, training=False):
         # inputs: [batch_size, num_nodes, input_dim]
         # adj_matrix: [num_nodes, num_nodes]
-        tf.print("Input stats:", 
-                 "shape=", tf.shape(inputs),
-                 "min=", tf.reduce_min(inputs),
-                 "max=", tf.reduce_max(inputs),
-                 "has_nan=", tf.reduce_any(tf.math.is_nan(inputs)))        
+        
+        # REMOVED THE tf.print STATEMENT THAT WAS CAUSING TPU COMPILATION ERROR
+        # Only print debug info if explicitly enabled and not on TPU
+        if self.debug and not tf.config.list_logical_devices('TPU'):
+            tf.print("Input stats:", 
+                    "shape=", tf.shape(inputs),
+                    "min=", tf.reduce_min(inputs),
+                    "max=", tf.reduce_max(inputs),
+                    "has_nan=", tf.reduce_any(tf.math.is_nan(inputs)))
+        
         # Apply linear transformations
         queries = self.query_dense(inputs)  # [batch_size, num_nodes, output_dim*heads]
         keys = self.key_dense(inputs)       # [batch_size, num_nodes, output_dim*heads]
