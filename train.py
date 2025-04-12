@@ -49,6 +49,16 @@ class DroughtMetrics(tf.keras.metrics.Metric):
 
 @tf.function
 def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
+    # Check for NaNs
+    mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+    y_true = tf.boolean_mask(y_true, mask)
+    y_pred = tf.boolean_mask(y_pred, mask)
+    
+    # If no valid values remain, return small constant loss
+    if tf.equal(tf.size(y_true), 0):
+        return tf.constant(0.1, dtype=tf.float32)
+    
+    # Original loss calculation with valid values only
     base_loss = tf.keras.losses.Huber(delta=0.5)(y_true, y_pred)
     
     drought_mask = tf.cast(y_true < -0.5, tf.float32)
@@ -56,8 +66,9 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     focal_weight = tf.pow(1.0 - tf.exp(-error), gamma)
     drought_err = tf.reduce_mean(focal_weight * error * drought_mask) * alpha
     
-    return base_loss + drought_err
-
+    # Check for NaN in result and replace with small constant
+    result = base_loss + drought_err
+    return tf.where(tf.math.is_nan(result), tf.constant(0.1, dtype=tf.float32), result)
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
     
