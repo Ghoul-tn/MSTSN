@@ -209,6 +209,10 @@ def main():
     if np.isnan(features).any() or np.isnan(targets).any():
         print(f"Feature NaNs: {np.isnan(features).sum()}, Target NaNs: {np.isnan(targets).sum()}")    
     print(f"Data loaded: Features shape {features.shape}, Targets shape {targets.shape}")
+    print(f"NaN in features: {np.isnan(features).sum()}/{features.size}")
+    print(f"NaN in targets: {np.isnan(targets).sum()}/{targets.size}")
+    print(f"Feature range: {features.min()} to {features.max()}")
+    print(f"Target range: {targets.min()} to {targets.max()}")
     
     # Check for minimum viable dataset size
     if processor.num_nodes < 1:
