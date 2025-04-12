@@ -16,7 +16,7 @@ class AdaptiveAdjacency(layers.Layer):
     def call(self, training=False):
         """Generate adjacency matrix with top-k connections"""
         # Normalize embeddings
-        norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
+        norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1, epsilon=1e-12)
         
         # Compute similarity matrix
         sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
