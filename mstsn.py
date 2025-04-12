@@ -5,6 +5,8 @@ from spektral.layers import GATConv
 class AdaptiveAdjacency(layers.Layer):
     def __init__(self, num_nodes, hidden_dim):
         super().__init__()
+        self.num_nodes = num_nodes
+        self.hidden_dim = hidden_dim
         self.embeddings = self.add_weight(
             shape=(num_nodes, hidden_dim),
             initializer='glorot_uniform',
@@ -12,19 +14,21 @@ class AdaptiveAdjacency(layers.Layer):
         )
         
     def call(self):
-        """Generate sparse adjacency matrix with top-k connections"""
+        """Generate adjacency matrix with top-k connections"""
+        # Normalize embeddings
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
+        
+        # Compute similarity matrix
         sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
         
-        # Keep top-20 connections per node
-        k = 20
-        # Returns values and indices separately
-        top_k_values, top_k_indices = tf.math.top_k(sim_matrix, k=k)
-        # Apply mask to remove self-connections
-        mask = 1 - tf.eye(tf.shape(sim_matrix)[0])
-        masked_values = top_k_values * tf.gather(mask, tf.range(tf.shape(mask)[0]))[:, None]
+        # Get top-k values and indices - using a simpler approach
+        k = min(20, self.num_nodes - 1)  # Make sure k is valid
         
-        return masked_values, top_k_indices
+        # Direct approach - use TF's top_k operation
+        top_k = tf.math.top_k(sim_matrix, k=k)
+        
+        # Return as separate tensors - this is the format needed
+        return top_k.values, top_k.indices
 
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
@@ -43,33 +47,31 @@ class SpatialProcessor(layers.Layer):
         super().build(input_shape)
 
     def call(self, inputs):
-        # Get sparse adjacency matrix
+        # Get adjacency matrix values and indices
         adj_values, adj_indices = self.adj_layer()
         
-        # Generate edge indices [num_edges, 2]
-        # Create source indices by tiling the range over all nodes
-        source_indices = tf.repeat(tf.range(self.num_nodes, dtype=tf.int32), 20)
-        # Flatten destination indices from the top-k operation
-        dest_indices = tf.reshape(adj_indices, [-1])
+        # Generate edge indices for GATConv
+        # Create source indices for each node (repeat each node index k times)
+        source_nodes = tf.repeat(tf.range(self.num_nodes, dtype=tf.int32), repeats=adj_indices.shape[1])
         
-        # Combine source and destination indices into edge pairs
-        edge_indices = tf.stack([source_indices, dest_indices], axis=1)
+        # Flatten the destination indices
+        target_nodes = tf.reshape(adj_indices, [-1])
         
-        # Add self-loops to ensure every node connects to itself
+        # Stack to create edge_index tensor [2, num_edges]
+        edge_indices = tf.stack([source_nodes, target_nodes], axis=1)
+        
+        # Add self-loops
         self_loops = tf.stack([
             tf.range(self.num_nodes, dtype=tf.int32),
             tf.range(self.num_nodes, dtype=tf.int32)
         ], axis=1)
         edge_indices = tf.concat([edge_indices, self_loops], axis=0)
         
-        # GAT processing
+        # Apply GAT layers
         x = self.gat1([inputs, edge_indices])
         x = tf.nn.relu(x)
         x = self.dropout(x)
         return self.gat2([x, edge_indices])
-        
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0], self.num_nodes, self.gat_units)
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.1):
@@ -85,12 +87,10 @@ class TemporalTransformer(layers.Layer):
         self.dropout2 = layers.Dropout(dropout_rate)
         
     def call(self, inputs, training=False):
-        # Apply attention with residual connection and normalization
         attn_output = self.attn(inputs, inputs)
         attn_output = self.dropout1(attn_output, training=training)
         x = self.layernorm1(inputs + attn_output)
         
-        # Apply feed-forward network with residual connection and normalization
         ffn_output = self.ffn(x)
         ffn_output = self.dropout2(ffn_output, training=training)
         return self.layernorm2(x + ffn_output)
@@ -112,37 +112,41 @@ class EnhancedMSTSN(Model):
         # Reshape inputs to process spatial features for all sequences and batches together
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
         
-        # Spatial processing - produces [batch*seq_len, num_nodes, gat_units]
+        # Spatial processing
         spatial_out = self.spatial(spatial_in)
         
         # Reshape back to separate batch and sequence dimensions
         spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
         
-        # Temporal processing - process each node separately
+        # Temporal processing - handle each node separately
         # Reshape to [batch*num_nodes, seq_len, features]
-        temporal_in = tf.reshape(tf.transpose(spatial_out, [0, 2, 1, 3]), 
-                                [batch_size * self.num_nodes, seq_len, 32])
+        temporal_in = tf.reshape(
+            tf.transpose(spatial_out, [0, 2, 1, 3]), 
+            [batch_size * self.num_nodes, seq_len, 32]
+        )
         
         # Apply temporal transformer
         temporal_out = self.temporal(temporal_in, training=training)
         
         # Reshape back to [batch, num_nodes, seq_len, features]
-        temporal_out = tf.reshape(temporal_out, [batch_size, self.num_nodes, seq_len, 32])
+        temporal_out = tf.reshape(
+            temporal_out, 
+            [batch_size, self.num_nodes, seq_len, 32]
+        )
         
         # Cross-attention between spatial and temporal features
-        # Get mean across sequence dimension for spatial features
+        # Mean across sequence dimension for spatial features
         spatial_feats = tf.reduce_mean(spatial_out, axis=1)  # [batch, num_nodes, features]
         
-        # Get mean across sequence dimension for temporal features
+        # Mean across sequence dimension for temporal features
         temporal_feats = tf.reduce_mean(temporal_out, axis=2)  # [batch, num_nodes, features]
         
         # Apply cross-attention
         fused = self.cross_attn(spatial_feats, temporal_feats)
         fused = self.layernorm(fused)
         
-        # Final prediction - reduce to single value per node
-        # Apply dense layer across feature dimension
+        # Final prediction
         node_preds = self.final_dense(fused)  # [batch, num_nodes, 1]
         
-        # Remove the last dimension to match target shape [batch, num_nodes]
+        # Remove last dimension to match target shape [batch, num_nodes]
         return tf.squeeze(node_preds, axis=-1)
