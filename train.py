@@ -157,6 +157,7 @@ class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
         # Convert to float
         step = tf.cast(step, tf.float32)
         warmup_steps = tf.cast(self.warmup_steps, tf.float32)
+        decay_steps = tf.cast(self.decay_steps, tf.float32)
         
         # Linear warmup
         warmup_factor = tf.minimum(1.0, step / warmup_steps)
@@ -164,7 +165,7 @@ class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
         # Cosine decay after warmup
         step_after_warmup = tf.maximum(0.0, step - warmup_steps)
         cosine_decay = 0.5 * (1.0 + tf.cos(
-            tf.constant(np.pi) * step_after_warmup / self.decay_steps
+            tf.constant(np.pi) * step_after_warmup / decay_steps
         ))
         
         # Combine both parts
@@ -180,6 +181,7 @@ class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
             "warmup_steps": self.warmup_steps,
             "decay_steps": self.decay_steps
         }
+        
 def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
