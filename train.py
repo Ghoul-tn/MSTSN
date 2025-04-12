@@ -219,16 +219,10 @@ def main():
     # Model configuration
     with strategy.scope():
         model = EnhancedMSTSN(num_nodes=2152)
-        # Explicit shape initialization
-        model.build(input_shape=(None, 12, 2152, 3))
         dummy_input = tf.random.normal([2, 12, 2152, 3])
         output = model(dummy_input)
-        print(output.shape)  # Should be (2, 2152)
+        print(f"Output shape: {output.shape}")  # Should be (2, 2152)
         model.summary()
-        # Verify with dummy input
-        dummy_input = tf.random.normal([2, 12, 2152, 3])
-        dummy_output = model(dummy_input)
-        print(f"Verification output shape: {dummy_output.shape}")
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
