@@ -31,7 +31,7 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         
         # Detection rate
         correct_detections = tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32) * drought_mask
-        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / tf.maximum(total_drought, 1e-7)
+        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / tf.maximum(total_drought, 1e-7))
         
         self.count.assign_add(1.0)
 
