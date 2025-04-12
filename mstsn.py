@@ -13,22 +13,32 @@ class AdaptiveAdjacency(layers.Layer):
             name='node_embeddings'
         )
         
-    def call(self, inputs, training=False):  # Add inputs parameter to ensure gradient flow
-        """Generate adjacency matrix with gradient-preserving operations"""
-        # Normalize embeddings
-        norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1, epsilon=1e-12)
+    def call(self, inputs, training=False):
+        # Make sure embeddings have no NaN values
+        clean_embeddings = tf.where(tf.math.is_nan(self.embeddings), 
+                                   tf.zeros_like(self.embeddings), 
+                                   self.embeddings)
+        
+        # Normalize embeddings with epsilon to prevent division by zero
+        norm_emb = tf.math.l2_normalize(clean_embeddings, axis=-1, epsilon=1e-12)
         
         # Compute similarity matrix
         sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
         
-        # Create trainable adjacency matrix without breaking gradients
-        adj_matrix = tf.nn.sigmoid(sim_matrix)  # This keeps gradients flowing
+        # Apply scaling before sigmoid to avoid gradient saturation
+        sim_matrix = sim_matrix * 10.0  # Scale factor to sharpen the sigmoid
         
-        # Add self-loops directly
+        # Create trainable adjacency matrix
+        adj_matrix = tf.nn.sigmoid(sim_matrix)
+        
+        # Add self-loops
         eye = tf.eye(self.num_nodes, dtype=tf.float32)
-        adj_matrix = adj_matrix + eye - (adj_matrix * eye)  # Add self-loops without double-counting
+        adj_matrix = adj_matrix + eye - (adj_matrix * eye)
         
-        return adj_matrix  # Return full adjacency matrix directly
+        # Ensure no NaNs
+        adj_matrix = tf.where(tf.math.is_nan(adj_matrix), eye, adj_matrix)
+        
+        return adj_matrix
 
 class GraphAttention(layers.Layer):
     def __init__(self, output_dim, heads=1, dropout=0.1):
