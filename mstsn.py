@@ -11,11 +11,15 @@ class AdaptiveAdjacency(layers.Layer):
             name='node_embeddings'
         )
         
-    def call(self, inputs=None):  # Add optional inputs parameter
-        """Generates adjacency matrix from learned embeddings"""
+    def call(self):
+        """Generate sparse adjacency matrix with top-k connections"""
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
-        adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
-        return tf.nn.sigmoid(adj) * (1 - tf.eye(tf.shape(adj)[0]))
+        sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
+        
+        # Keep top-20 connections per node
+        k = 20
+        top_k = tf.math.top_k(sim_matrix, k=k)
+        return top_k.values * (1 - tf.eye(tf.shape(sim_matrix)[0]))
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
         super().__init__()
@@ -33,23 +37,32 @@ class SpatialProcessor(layers.Layer):
         super().build(input_shape)
 
     def call(self, inputs):
-        # Generate adjacency matrix with proper call signature
-        adj = self.adj_layer(inputs=None)  # Explicitly pass None
-        edge_indices = tf.where(adj > 0.5)
-        edge_indices = tf.cast(edge_indices, tf.int32)
+        # Get sparse adjacency matrix
+        adj_values, adj_indices = self.adj_layer()
         
-        # Add self-loops with matching dtype
-        self_loops = tf.range(self.num_nodes, dtype=tf.int32)
-        self_loops = tf.stack([self_loops, self_loops], axis=1)
+        # Generate edge indices [num_edges, 2]
+        batch_indices = tf.tile(
+            tf.range(self.num_nodes, dtype=tf.int32)[:, None], 
+            [1, 20]
+        )
+        edge_indices = tf.stack([
+            tf.reshape(batch_indices, [-1]),
+            tf.reshape(adj_indices, [-1])
+        ], axis=1)
+        
+        # Add self-loops
+        self_loops = tf.stack([
+            tf.range(self.num_nodes, dtype=tf.int32),
+            tf.range(self.num_nodes, dtype=tf.int32)
+        ], axis=1)
         edge_indices = tf.concat([edge_indices, self_loops], axis=0)
-
-        # Process through GAT layers
+        
+        # GAT processing
         x = self.gat1([inputs, edge_indices])
         return self.gat2([tf.nn.relu(x), edge_indices])
-
+        
     def compute_output_shape(self, input_shape):
-        return (input_shape[0], self.num_nodes, self.gat_units)
-
+        return (input_shape[0], self.num_nodes, 32)
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim):
