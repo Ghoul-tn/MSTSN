@@ -118,7 +118,7 @@ class EnhancedMSTSN(Model):
         self.spatial = SpatialProcessor(num_nodes, 32, adj_matrix)
         self.temporal = TemporalTransformer(num_heads=2, ff_dim=64)
         self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
-        self.final_dense = layers.Dense(1)
+        self.final_dense = layers.Dense(1, activation='tanh')
         self.layernorm = layers.LayerNormalization()
 
     def call(self, inputs, training=False):
