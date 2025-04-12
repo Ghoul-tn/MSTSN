@@ -1,6 +1,5 @@
 import tensorflow as tf
 from tensorflow.keras import layers, Model
-from spektral.layers import GATConv
 
 class AdaptiveAdjacency(layers.Layer):
     def __init__(self, num_nodes, hidden_dim):
@@ -36,35 +35,83 @@ class AdaptiveAdjacency(layers.Layer):
         # Return the top-k values and indices
         return top_k_values, top_k_indices
 
+class GraphAttention(layers.Layer):
+    def __init__(self, output_dim, heads=1, dropout=0.1):
+        super().__init__()
+        self.output_dim = output_dim
+        self.heads = heads
+        self.dropout = dropout
+        self.query_dense = layers.Dense(output_dim * heads)
+        self.key_dense = layers.Dense(output_dim * heads)
+        self.value_dense = layers.Dense(output_dim * heads)
+        self.dropout_layer = layers.Dropout(dropout)
+
+    def call(self, inputs, adj_matrix, training=False):
+        # inputs: [batch_size, num_nodes, input_dim]
+        # adj_matrix: [num_nodes, num_nodes]
+        
+        # Apply linear transformations
+        queries = self.query_dense(inputs)  # [batch_size, num_nodes, output_dim*heads]
+        keys = self.key_dense(inputs)       # [batch_size, num_nodes, output_dim*heads]
+        values = self.value_dense(inputs)   # [batch_size, num_nodes, output_dim*heads]
+        
+        # Reshape for multi-head attention
+        batch_size = tf.shape(inputs)[0]
+        num_nodes = tf.shape(inputs)[1]
+        
+        queries = tf.reshape(queries, [batch_size, num_nodes, self.heads, self.output_dim])
+        keys = tf.reshape(keys, [batch_size, num_nodes, self.heads, self.output_dim])
+        values = tf.reshape(values, [batch_size, num_nodes, self.heads, self.output_dim])
+        
+        # Calculate attention scores
+        # [batch_size, heads, num_nodes, num_nodes]
+        attention_scores = tf.einsum('bihd,bjhd->bhij', queries, keys)
+        
+        # Scale attention scores
+        attention_scores = attention_scores / tf.sqrt(tf.cast(self.output_dim, tf.float32))
+        
+        # Apply adjacency matrix as mask
+        # [1, 1, num_nodes, num_nodes]
+        adj_mask = tf.expand_dims(tf.expand_dims(adj_matrix, 0), 0)
+        
+        # Set attention scores to -inf where there are no connections
+        neg_inf = -1e9
+        attention_scores = tf.where(tf.equal(adj_mask, 0), tf.ones_like(attention_scores) * neg_inf, attention_scores)
+        
+        # Apply softmax to get attention weights
+        attention_weights = tf.nn.softmax(attention_scores, axis=-1)
+        attention_weights = self.dropout_layer(attention_weights, training=training)
+        
+        # Apply attention weights to values
+        # [batch_size, heads, num_nodes, output_dim]
+        attention_output = tf.einsum('bhij,bjhd->bihd', attention_weights, values)
+        
+        # Combine heads
+        attention_output = tf.reshape(attention_output, [batch_size, num_nodes, self.heads * self.output_dim])
+        
+        return attention_output
+
 class SpatialProcessor(layers.Layer):
-    def __init__(self, num_nodes, gat_units):
+    def __init__(self, num_nodes, output_dim):
         super().__init__()
         self.num_nodes = num_nodes
-        self.gat_units = gat_units
+        self.output_dim = output_dim
         self.adj_layer = AdaptiveAdjacency(num_nodes, 16)
-        self.gat1 = GATConv(gat_units, attn_heads=4, concat_heads=True)
-        self.gat2 = GATConv(gat_units, attn_heads=1, concat_heads=False)
+        self.gat1 = GraphAttention(output_dim // 4, heads=4, dropout=0.1)
+        self.gat2 = GraphAttention(output_dim, heads=1, dropout=0.1)
         self.dropout = layers.Dropout(0.1)
-
-    def build(self, input_shape):
-        # Build the GATConv layers with appropriate shapes
-        self.gat1.build([(self.num_nodes, input_shape[-1]), (self.num_nodes, self.num_nodes)])
-        self.gat2.build([(self.num_nodes, self.gat_units * 4), (self.num_nodes, self.num_nodes)])  # 4 heads
-        super().build(input_shape)
+        self.layer_norm = layers.LayerNormalization()
 
     def call(self, inputs, training=False):
         # Get adjacency matrix values and indices
         adj_values, adj_indices = self.adj_layer(training=training)
         
-        # Instead of creating edge indices, create a dense adjacency matrix
-        # Initialize with zeros
+        # Create adjacency matrix
         adj_matrix = tf.zeros((self.num_nodes, self.num_nodes), dtype=tf.float32)
         
         # For each node, set its connections based on adj_indices
         for i in range(self.num_nodes):
-            # Get the indices this node connects to
             connections = adj_indices[i]
-            # Set those connections to 1 in the adjacency matrix
             updates = tf.ones_like(connections, dtype=tf.float32)
             indices = tf.stack([
                 tf.ones_like(connections, dtype=tf.int32) * i,
@@ -75,11 +122,13 @@ class SpatialProcessor(layers.Layer):
         # Add self-loops
         adj_matrix = adj_matrix + tf.eye(self.num_nodes, dtype=tf.float32)
         
-        # Apply GAT layers
-        x = self.gat1([inputs, adj_matrix])
+        # Apply graph attention layers
+        x = self.gat1(inputs, adj_matrix, training=training)
         x = tf.nn.relu(x)
         x = self.dropout(x, training=training)
-        return self.gat2([x, adj_matrix])
+        x = self.gat2(x, adj_matrix, training=training)
+        
+        return self.layer_norm(x)
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.1):
