@@ -13,7 +13,7 @@ class AdaptiveAdjacency(layers.Layer):
             name='node_embeddings'
         )
         
-    def call(self):
+    def call(self, training=False):
         """Generate adjacency matrix with top-k connections"""
         # Normalize embeddings
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
@@ -21,21 +21,20 @@ class AdaptiveAdjacency(layers.Layer):
         # Compute similarity matrix
         sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
         
-        print(f"Debug - sim_matrix shape: {sim_matrix.shape}")
-        print(f"Debug - num_nodes: {self.num_nodes}")
+        # Set diagonal to a very low value so nodes don't select themselves
+        # (we'll add self-loops separately later)
+        diag_mask = tf.eye(self.num_nodes) * -1e9
+        sim_matrix = sim_matrix + diag_mask
         
         # Get top-k values and indices
-        k = min(20, self.num_nodes - 1)  # Make sure k is valid
-        print(f"Debug - k value: {k}")
+        k = tf.minimum(20, self.num_nodes - 1)  # Make sure k is valid
         
-        # Use tf.math.top_k properly
-        top_k = tf.math.top_k(sim_matrix, k=k)
+        # Use tf.math.top_k on each row separately
+        # This ensures we get the top k values for each node
+        top_k_values, top_k_indices = tf.math.top_k(sim_matrix, k=k)
         
-        print(f"Debug - top_k.values shape: {top_k.values.shape}")
-        print(f"Debug - top_k.indices shape: {top_k.indices.shape}")
-        
-        # Return as separate tensors
-        return top_k.values, top_k.indices
+        # Return the top-k values and indices
+        return top_k_values, top_k_indices
 
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
@@ -53,18 +52,18 @@ class SpatialProcessor(layers.Layer):
         self.gat2.build([(self.num_nodes, self.gat_units * 4), (None, 2)])  # 4 heads
         super().build(input_shape)
 
-    def call(self, inputs):
+    def call(self, inputs, training=False):
         # Get adjacency matrix values and indices
-        adj_values, adj_indices = self.adj_layer()
+        adj_values, adj_indices = self.adj_layer(training=training)
         
         # Generate edge indices for GATConv
         # Create source indices for each node (repeat each node index k times)
-        source_nodes = tf.repeat(tf.range(self.num_nodes, dtype=tf.int32), repeats=adj_indices.shape[1])
+        source_nodes = tf.repeat(tf.range(self.num_nodes, dtype=tf.int32), repeats=tf.shape(adj_indices)[1])
         
         # Flatten the destination indices
         target_nodes = tf.reshape(adj_indices, [-1])
         
-        # Stack to create edge_index tensor [2, num_edges]
+        # Stack to create edge_index tensor with shape [num_edges, 2]
         edge_indices = tf.stack([source_nodes, target_nodes], axis=1)
         
         # Add self-loops
@@ -77,7 +76,7 @@ class SpatialProcessor(layers.Layer):
         # Apply GAT layers
         x = self.gat1([inputs, edge_indices])
         x = tf.nn.relu(x)
-        x = self.dropout(x)
+        x = self.dropout(x, training=training)
         return self.gat2([x, edge_indices])
         
 class TemporalTransformer(layers.Layer):
@@ -120,7 +119,7 @@ class EnhancedMSTSN(Model):
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
         
         # Spatial processing
-        spatial_out = self.spatial(spatial_in)
+        spatial_out = self.spatial(spatial_in, training=training)
         
         # Reshape back to separate batch and sequence dimensions
         spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
