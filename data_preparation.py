@@ -2,12 +2,7 @@ import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer
 from scipy.interpolate import interp1d
-
-# Modified GambiaDataProcessor in data_preparation.py
-import numpy as np
-import tensorflow as tf
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer
-from scipy.interpolate import interp1d
+import scipy.sparse
 
 class GambiaDataProcessor:
     def __init__(self, data_path):
@@ -35,7 +30,7 @@ class GambiaDataProcessor:
         # Create valid pixel mask from SPI (same as your transformer code)
         valid_mask = ~np.isnan(spi[0])  # Use SPI's mask
         self.valid_pixels = np.where(valid_mask)
-        self.num_nodes = valid_mask.sum()  # Should be 2139
+        self.num_nodes = valid_mask.sum()  # Should be 2152
         print(f"Found {self.num_nodes} valid pixels for processing")
 
         # Initialize arrays - [time, nodes, features]
@@ -44,10 +39,50 @@ class GambiaDataProcessor:
 
         # Extract valid pixels
         y_idx, x_idx = self.valid_pixels
+        
+        # Handle missing values in soil moisture - interpolate if necessary
+        if np.isnan(soil).any():
+            # Find the indices of valid soil moisture pixels
+            soil_valid_mask = ~np.isnan(soil[0])
+            soil_valid_pixels = np.where(soil_valid_mask)
+            
+            # If soil has different valid pixels than SPI, we need to interpolate
+            if soil_valid_pixels[0].shape[0] != self.num_nodes:
+                print("Interpolating missing soil moisture data...")
+                # Create interpolated soil moisture for all valid SPI pixels
+                for t in range(287):
+                    # Get valid soil values at this time step
+                    valid_y, valid_x = np.where(~np.isnan(soil[t]))
+                    valid_values = soil[t, valid_y, valid_x]
+                    
+                    # Only interpolate if we have valid values
+                    if len(valid_values) > 0:
+                        # Create position arrays for interpolation
+                        valid_pos = np.column_stack([valid_y, valid_x])
+                        query_pos = np.column_stack([y_idx, x_idx])
+                        
+                        # Use nearest neighbor interpolation 
+                        from scipy.spatial import cKDTree
+                        tree = cKDTree(valid_pos)
+                        dist, idx = tree.query(query_pos, k=1)
+                        
+                        # Apply interpolation
+                        features[t, :, 1] = valid_values[idx]
+                    else:
+                        # Use zeros for completely missing time steps
+                        features[t, :, 1] = 0.0
+            else:
+                # Simply extract valid pixels if the masks are the same
+                for t in range(287):
+                    features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
+        else:
+            # No NaNs in soil data, process normally
+            for t in range(287):
+                features[t, :, 1] = soil[t, y_idx, x_idx]
+
+        # Process NDVI and LST which have same valid pixels as SPI
         for t in range(287):
-            # Handle NaNs in features
             features[t, :, 0] = np.nan_to_num(ndvi[t, y_idx, x_idx], nan=0.0)
-            features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
             features[t, :, 2] = np.nan_to_num(lst[t, y_idx, x_idx], nan=0.0)
             targets[t, :] = spi[t, y_idx, x_idx]
 
@@ -58,6 +93,7 @@ class GambiaDataProcessor:
         targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, self.num_nodes)
 
         return features, targets
+        
     def create_adjacency_on_demand(self, threshold=10):
         """Create adjacency matrix only when explicitly requested"""
         if self.valid_pixels is None:
