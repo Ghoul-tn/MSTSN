@@ -9,32 +9,26 @@ class AdaptiveAdjacency(layers.Layer):
         self.embeddings = self.add_weight(
             shape=(num_nodes, hidden_dim),
             initializer='glorot_uniform',
-            trainable=True,  # Ensure it's trainable
+            trainable=True,
             name='node_embeddings'
         )
         
-    def call(self, training=False):
-        """Generate adjacency matrix with top-k connections"""
+    def call(self, inputs, training=False):  # Add inputs parameter to ensure gradient flow
+        """Generate adjacency matrix with gradient-preserving operations"""
         # Normalize embeddings
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1, epsilon=1e-12)
         
         # Compute similarity matrix
         sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
         
-        # Set diagonal to a very low value so nodes don't select themselves
-        # (we'll add self-loops separately later)
-        diag_mask = tf.eye(self.num_nodes) * -1e9
-        sim_matrix = sim_matrix + diag_mask
+        # Create trainable adjacency matrix without breaking gradients
+        adj_matrix = tf.nn.sigmoid(sim_matrix)  # This keeps gradients flowing
         
-        # Get top-k values and indices
-        k = tf.minimum(20, self.num_nodes - 1)  # Make sure k is valid
+        # Add self-loops directly
+        eye = tf.eye(self.num_nodes, dtype=tf.float32)
+        adj_matrix = adj_matrix + eye - (adj_matrix * eye)  # Add self-loops without double-counting
         
-        # Use tf.math.top_k on each row separately
-        # This ensures we get the top k values for each node
-        top_k_values, top_k_indices = tf.math.top_k(sim_matrix, k=k)
-        
-        # Return the top-k values and indices
-        return top_k_values, top_k_indices
+        return adj_matrix  # Return full adjacency matrix directly
 
 class GraphAttention(layers.Layer):
     def __init__(self, output_dim, heads=1, dropout=0.1):
@@ -50,7 +44,11 @@ class GraphAttention(layers.Layer):
     def call(self, inputs, adj_matrix, training=False):
         # inputs: [batch_size, num_nodes, input_dim]
         # adj_matrix: [num_nodes, num_nodes]
-        
+        tf.print("Input stats:", 
+                 "shape=", tf.shape(inputs),
+                 "min=", tf.reduce_min(inputs),
+                 "max=", tf.reduce_max(inputs),
+                 "has_nan=", tf.reduce_any(tf.math.is_nan(inputs)))        
         # Apply linear transformations
         queries = self.query_dense(inputs)  # [batch_size, num_nodes, output_dim*heads]
         keys = self.key_dense(inputs)       # [batch_size, num_nodes, output_dim*heads]
@@ -102,31 +100,14 @@ class SpatialProcessor(layers.Layer):
         self.gat2 = GraphAttention(output_dim, heads=1, dropout=0.1)
         self.dropout = layers.Dropout(0.1)
         self.layer_norm = layers.LayerNormalization()
-        # Add a projection layer for the residual connection
         self.projection = layers.Dense(output_dim, use_bias=False)
 
     def call(self, inputs, training=False):
-        # Project inputs to match output dimension for residual connection
+        # Project inputs for residual connection
         input_projected = self.projection(inputs)
         
-        # Get adjacency matrix values and indices
-        adj_values, adj_indices = self.adj_layer(training=training)
-        
-        # Create adjacency matrix
-        adj_matrix = tf.zeros((self.num_nodes, self.num_nodes), dtype=tf.float32)
-        
-        # For each node, set its connections based on adj_indices
-        for i in range(self.num_nodes):
-            connections = adj_indices[i]
-            indices = tf.stack([
-                tf.ones_like(connections, dtype=tf.int32) * i,
-                connections
-            ], axis=1)
-            updates = tf.ones_like(connections, dtype=tf.float32)
-            adj_matrix = tf.tensor_scatter_nd_update(adj_matrix, indices, updates)
-        
-        # Add self-loops
-        adj_matrix = adj_matrix + tf.eye(self.num_nodes, dtype=tf.float32)
+        # Get full adjacency matrix with gradient flow preserved
+        adj_matrix = self.adj_layer(inputs, training=training)
         
         # Apply graph attention layers
         x = self.gat1(inputs, adj_matrix, training=training)
@@ -134,7 +115,7 @@ class SpatialProcessor(layers.Layer):
         x = self.dropout(x, training=training)
         x = self.gat2(x, adj_matrix, training=training)
         
-        # Add residual connection with projected input
+        # Add residual connection
         return self.layer_norm(x + input_projected)
         
 class TemporalTransformer(layers.Layer):
