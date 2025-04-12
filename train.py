@@ -192,14 +192,22 @@ class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
             "warmup_steps": self.warmup_steps,
             "decay_steps": self.decay_steps
         }
-        
+    
+def configure_tpu_options():
+    """Configure TF to handle unsupported ops by running them on CPU"""
+    # Enable soft device placement to allow ops without TPU implementation to run on CPU
+    tf.config.set_soft_device_placement(True)
+    print("Enabled soft device placement for TPU compatibility")
+    
 def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
-    
+
+    # Enable soft device placement for TPU compatibility
+    configure_tpu_options()
     # Get strategy and TPU status
     strategy, using_tpu = configure_distribute_strategy(args.use_tpu)
-
+    
     # Data loading
     print(f"\nLoading data from: {args.data_path}")
     processor = GambiaDataProcessor(args.data_path)
