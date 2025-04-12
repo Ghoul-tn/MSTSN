@@ -193,7 +193,10 @@ def main():
     print(f"\nLoading data from: {args.data_path}")
     processor = GambiaDataProcessor(args.data_path)
     features, targets = processor.process_data()
-    
+    # Add after processor.process_data()
+    print(f"NaN check - Features: {np.isnan(features).any()}, Targets: {np.isnan(targets).any()}")
+    if np.isnan(features).any() or np.isnan(targets).any():
+        print(f"Feature NaNs: {np.isnan(features).sum()}, Target NaNs: {np.isnan(targets).sum()}")    
     print(f"Data loaded: Features shape {features.shape}, Targets shape {targets.shape}")
     
     # Check for minimum viable dataset size
