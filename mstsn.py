@@ -48,36 +48,38 @@ class SpatialProcessor(layers.Layer):
 
     def build(self, input_shape):
         # Build the GATConv layers with appropriate shapes
-        self.gat1.build([(self.num_nodes, input_shape[-1]), (None, 2)])
-        self.gat2.build([(self.num_nodes, self.gat_units * 4), (None, 2)])  # 4 heads
+        self.gat1.build([(self.num_nodes, input_shape[-1]), (self.num_nodes, self.num_nodes)])
+        self.gat2.build([(self.num_nodes, self.gat_units * 4), (self.num_nodes, self.num_nodes)])  # 4 heads
         super().build(input_shape)
 
     def call(self, inputs, training=False):
         # Get adjacency matrix values and indices
         adj_values, adj_indices = self.adj_layer(training=training)
         
-        # Generate edge indices for GATConv
-        # Create source indices for each node (repeat each node index k times)
-        source_nodes = tf.repeat(tf.range(self.num_nodes, dtype=tf.int32), repeats=tf.shape(adj_indices)[1])
+        # Instead of creating edge indices, create a dense adjacency matrix
+        # Initialize with zeros
+        adj_matrix = tf.zeros((self.num_nodes, self.num_nodes), dtype=tf.float32)
         
-        # Flatten the destination indices
-        target_nodes = tf.reshape(adj_indices, [-1])
-        
-        # Stack to create edge_index tensor with shape [num_edges, 2]
-        edge_indices = tf.stack([source_nodes, target_nodes], axis=1)
+        # For each node, set its connections based on adj_indices
+        for i in range(self.num_nodes):
+            # Get the indices this node connects to
+            connections = adj_indices[i]
+            # Set those connections to 1 in the adjacency matrix
+            updates = tf.ones_like(connections, dtype=tf.float32)
+            indices = tf.stack([
+                tf.ones_like(connections, dtype=tf.int32) * i,
+                connections
+            ], axis=1)
+            adj_matrix = tf.tensor_scatter_nd_update(adj_matrix, indices, updates)
         
         # Add self-loops
-        self_loops = tf.stack([
-            tf.range(self.num_nodes, dtype=tf.int32),
-            tf.range(self.num_nodes, dtype=tf.int32)
-        ], axis=1)
-        edge_indices = tf.concat([edge_indices, self_loops], axis=0)
+        adj_matrix = adj_matrix + tf.eye(self.num_nodes, dtype=tf.float32)
         
         # Apply GAT layers
-        x = self.gat1([inputs, edge_indices])
+        x = self.gat1([inputs, adj_matrix])
         x = tf.nn.relu(x)
         x = self.dropout(x, training=training)
-        return self.gat2([x, edge_indices])
+        return self.gat2([x, adj_matrix])
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.1):
