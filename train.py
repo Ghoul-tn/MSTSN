@@ -221,6 +221,7 @@ def main():
             steps_per_epoch=steps_per_epoch,
             validation_data=val_ds.repeat(args.epochs),
             validation_steps=validation_steps,
+            verbose=2,
             callbacks=callbacks
         )
         model.save(os.path.join(args.results_dir, 'final_model.h5'))
