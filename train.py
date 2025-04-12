@@ -133,20 +133,53 @@ def debug_dataset(ds, steps=2):
     print("=== End Debug ===\n")
 
 
-# Learning rate scheduler for transformer training
-def get_lr_schedule(initial_lr, warmup_steps=1000):
-    def lr_schedule(step):
-        # Linear warmup followed by cosine decay
-        if step < warmup_steps:
-            return initial_lr * (step / warmup_steps)
-        else:
-            decay_steps = 100000  # Adjust as needed
-            step_after_warmup = step - warmup_steps
-            cosine_decay = 0.5 * (1 + tf.cos(tf.constant(np.pi) * step_after_warmup / decay_steps))
-            return initial_lr * cosine_decay
+# # Learning rate scheduler for transformer training
+# def get_lr_schedule(initial_lr, warmup_steps=1000):
+#     def lr_schedule(step):
+#         # Linear warmup followed by cosine decay
+#         if step < warmup_steps:
+#             return initial_lr * (step / warmup_steps)
+#         else:
+#             decay_steps = 100000  # Adjust as needed
+#             step_after_warmup = step - warmup_steps
+#             cosine_decay = 0.5 * (1 + tf.cos(tf.constant(np.pi) * step_after_warmup / decay_steps))
+#             return initial_lr * cosine_decay
     
-    return lr_schedule
-
+#     return lr_schedule
+class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
+    def __init__(self, initial_lr, warmup_steps=1000, decay_steps=100000):
+        super().__init__()
+        self.initial_lr = initial_lr
+        self.warmup_steps = warmup_steps
+        self.decay_steps = decay_steps
+        
+    def __call__(self, step):
+        # Convert to float
+        step = tf.cast(step, tf.float32)
+        warmup_steps = tf.cast(self.warmup_steps, tf.float32)
+        
+        # Linear warmup
+        warmup_factor = tf.minimum(1.0, step / warmup_steps)
+        
+        # Cosine decay after warmup
+        step_after_warmup = tf.maximum(0.0, step - warmup_steps)
+        cosine_decay = 0.5 * (1.0 + tf.cos(
+            tf.constant(np.pi) * step_after_warmup / self.decay_steps
+        ))
+        
+        # Combine both parts
+        return self.initial_lr * tf.where(
+            step < warmup_steps,
+            warmup_factor,
+            cosine_decay
+        )
+    
+    def get_config(self):
+        return {
+            "initial_lr": self.initial_lr,
+            "warmup_steps": self.warmup_steps,
+            "decay_steps": self.decay_steps
+        }
 def main():
     args = parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
@@ -213,8 +246,13 @@ def main():
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
-    # Apply learning rate schedule with warmup
-    lr_schedule = get_lr_schedule(args.lr, warmup_steps=min(1000, steps_per_epoch * 5))
+    # Apply learning rate schedule with warmup - USING FIXED VERSION
+    warmup_steps = min(1000, steps_per_epoch * 5)
+    lr_schedule = WarmupCosineDecay(
+        initial_lr=args.lr, 
+        warmup_steps=warmup_steps,
+        decay_steps=100000
+    )
     
     # Model configuration
     with strategy.scope():
