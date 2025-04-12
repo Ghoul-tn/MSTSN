@@ -11,11 +11,11 @@ class AdaptiveAdjacency(layers.Layer):
             name='node_embeddings'
         )
         
-    def call(self):
+    def call(self, inputs=None):  # Add optional inputs parameter
+        """Generates adjacency matrix from learned embeddings"""
         norm_emb = tf.math.l2_normalize(self.embeddings, axis=-1)
         adj = tf.matmul(norm_emb, norm_emb, transpose_b=True)
         return tf.nn.sigmoid(adj) * (1 - tf.eye(tf.shape(adj)[0]))
-
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, gat_units):
         super().__init__()
@@ -33,15 +33,17 @@ class SpatialProcessor(layers.Layer):
         super().build(input_shape)
 
     def call(self, inputs):
-        adj = self.adj_layer()
+        # Generate adjacency matrix with proper call signature
+        adj = self.adj_layer(inputs=None)  # Explicitly pass None
         edge_indices = tf.where(adj > 0.5)
         edge_indices = tf.cast(edge_indices, tf.int32)
         
-        # Add self-loops with proper dtype
+        # Add self-loops with matching dtype
         self_loops = tf.range(self.num_nodes, dtype=tf.int32)
         self_loops = tf.stack([self_loops, self_loops], axis=1)
         edge_indices = tf.concat([edge_indices, self_loops], axis=0)
 
+        # Process through GAT layers
         x = self.gat1([inputs, edge_indices])
         return self.gat2([tf.nn.relu(x), edge_indices])
 
