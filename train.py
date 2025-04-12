@@ -69,7 +69,7 @@ def parse_args():
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=16)  # Good default for ~2000 pixels
     parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--lr', type=float, default=2e-4)
+    parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--weight_decay', type=float, default=1e-3)
     parser.add_argument('--alpha', type=float, default=3.0,
                       help='Weight for drought-specific loss component')
