@@ -21,13 +21,20 @@ class AdaptiveAdjacency(layers.Layer):
         # Compute similarity matrix
         sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
         
-        # Get top-k values and indices - using a simpler approach
-        k = min(20, self.num_nodes - 1)  # Make sure k is valid
+        print(f"Debug - sim_matrix shape: {sim_matrix.shape}")
+        print(f"Debug - num_nodes: {self.num_nodes}")
         
-        # Direct approach - use TF's top_k operation
+        # Get top-k values and indices
+        k = min(20, self.num_nodes - 1)  # Make sure k is valid
+        print(f"Debug - k value: {k}")
+        
+        # Use tf.math.top_k properly
         top_k = tf.math.top_k(sim_matrix, k=k)
         
-        # Return as separate tensors - this is the format needed
+        print(f"Debug - top_k.values shape: {top_k.values.shape}")
+        print(f"Debug - top_k.indices shape: {top_k.indices.shape}")
+        
+        # Return as separate tensors
         return top_k.values, top_k.indices
 
 class SpatialProcessor(layers.Layer):
