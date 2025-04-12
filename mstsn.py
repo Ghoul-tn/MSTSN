@@ -102,8 +102,13 @@ class SpatialProcessor(layers.Layer):
         self.gat2 = GraphAttention(output_dim, heads=1, dropout=0.1)
         self.dropout = layers.Dropout(0.1)
         self.layer_norm = layers.LayerNormalization()
+        # Add a projection layer for the residual connection
+        self.projection = layers.Dense(output_dim, use_bias=False)
 
     def call(self, inputs, training=False):
+        # Project inputs to match output dimension for residual connection
+        input_projected = self.projection(inputs)
+        
         # Get adjacency matrix values and indices
         adj_values, adj_indices = self.adj_layer(training=training)
         
@@ -111,7 +116,6 @@ class SpatialProcessor(layers.Layer):
         adj_matrix = tf.zeros((self.num_nodes, self.num_nodes), dtype=tf.float32)
         
         # For each node, set its connections based on adj_indices
-        # Use scatter_nd updates which should ensure gradient flow
         for i in range(self.num_nodes):
             connections = adj_indices[i]
             indices = tf.stack([
@@ -130,7 +134,8 @@ class SpatialProcessor(layers.Layer):
         x = self.dropout(x, training=training)
         x = self.gat2(x, adj_matrix, training=training)
         
-        return self.layer_norm(x + inputs[:,:,0:x.shape[-1]])  # Add a residual connection if possible
+        # Add residual connection with projected input
+        return self.layer_norm(x + input_projected)
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.1):
