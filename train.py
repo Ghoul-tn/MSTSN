@@ -218,17 +218,37 @@ def main():
     
     # Model configuration
     with strategy.scope():
-        model = EnhancedMSTSN(num_nodes=2152)
-        dummy_input = tf.random.normal([2, 12, 2152, 3])
-        output = model(dummy_input)
-        print(f"Output shape: {output.shape}")  # Should be (2, 2152)
+        model = EnhancedMSTSN(num_nodes=processor.num_nodes)
+        
+        # Create a small dummy input with the correct dimensions for testing
+        print("Creating dummy input for model verification...")
+        try:
+            # Use small batch size and sequence length for testing
+            dummy_batch_size = 2
+            dummy_seq_len = 12
+            dummy_input = tf.zeros([dummy_batch_size, dummy_seq_len, processor.num_nodes, 3], dtype=tf.float32)
+            print(f"Dummy input shape: {dummy_input.shape}")
+            
+            # Try a forward pass
+            print("Testing forward pass...")
+            output = model(dummy_input)
+            print(f"Forward pass successful! Output shape: {output.shape}")
+        except Exception as e:
+            print(f"Error during model verification: {e}")
+            import traceback
+            traceback.print_exc()
+            print("Model couldn't be initialized correctly. Please fix the errors above.")
+            return
+        
+        # If we get here, model initialization succeeded
         model.summary()
+        
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay
         )
         
-        # Compile with reasonable steps_per_execution for TPU (adjusted for dataset size)
+        # Compile with reasonable steps_per_execution for TPU
         steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
         
