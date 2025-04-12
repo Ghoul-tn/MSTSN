@@ -1,44 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import layers, Model
-
-class AdaptiveAdjacency(layers.Layer):
-    def __init__(self, num_nodes, hidden_dim):
-        super().__init__()
-        self.num_nodes = num_nodes
-        self.hidden_dim = hidden_dim
-        self.embeddings = self.add_weight(
-            shape=(num_nodes, hidden_dim),
-            initializer='glorot_uniform',
-            trainable=True,
-            name='node_embeddings'
-        )
-        
-    def call(self, inputs, training=False):
-        # Make sure embeddings have no NaN values
-        clean_embeddings = tf.where(tf.math.is_nan(self.embeddings), 
-                                   tf.zeros_like(self.embeddings), 
-                                   self.embeddings)
-        
-        # Normalize embeddings with epsilon to prevent division by zero
-        norm_emb = tf.math.l2_normalize(clean_embeddings, axis=-1, epsilon=1e-12)
-        
-        # Compute similarity matrix
-        sim_matrix = tf.matmul(norm_emb, norm_emb, transpose_b=True)
-        
-        # Apply scaling before sigmoid to avoid gradient saturation
-        sim_matrix = sim_matrix * 10.0  # Scale factor to sharpen the sigmoid
-        
-        # Create trainable adjacency matrix
-        adj_matrix = tf.nn.sigmoid(sim_matrix)
-        
-        # Add self-loops
-        eye = tf.eye(self.num_nodes, dtype=tf.float32)
-        adj_matrix = adj_matrix + eye - (adj_matrix * eye)
-        
-        # Ensure no NaNs
-        adj_matrix = tf.where(tf.math.is_nan(adj_matrix), eye, adj_matrix)
-        
-        return adj_matrix
+import numpy as np
+import scipy.sparse
 
 class GraphAttention(layers.Layer):
     def __init__(self, output_dim, heads=1, dropout=0.1):
@@ -50,20 +13,10 @@ class GraphAttention(layers.Layer):
         self.key_dense = layers.Dense(output_dim * heads)
         self.value_dense = layers.Dense(output_dim * heads)
         self.dropout_layer = layers.Dropout(dropout)
-        self.debug = False  # Add a debug flag
 
     def call(self, inputs, adj_matrix, training=False):
         # inputs: [batch_size, num_nodes, input_dim]
         # adj_matrix: [num_nodes, num_nodes]
-        
-        # REMOVED THE tf.print STATEMENT THAT WAS CAUSING TPU COMPILATION ERROR
-        # Only print debug info if explicitly enabled and not on TPU
-        if self.debug and not tf.config.list_logical_devices('TPU'):
-            tf.print("Input stats:", 
-                    "shape=", tf.shape(inputs),
-                    "min=", tf.reduce_min(inputs),
-                    "max=", tf.reduce_max(inputs),
-                    "has_nan=", tf.reduce_any(tf.math.is_nan(inputs)))
         
         # Apply linear transformations
         queries = self.query_dense(inputs)  # [batch_size, num_nodes, output_dim*heads]
@@ -107,11 +60,16 @@ class GraphAttention(layers.Layer):
         return attention_output
 
 class SpatialProcessor(layers.Layer):
-    def __init__(self, num_nodes, output_dim):
+    def __init__(self, num_nodes, output_dim, adj_matrix):
         super().__init__()
         self.num_nodes = num_nodes
         self.output_dim = output_dim
-        self.adj_layer = AdaptiveAdjacency(num_nodes, 16)
+        
+        # Store the static adjacency matrix as a constant tensor
+        if isinstance(adj_matrix, scipy.sparse.spmatrix):
+            adj_matrix = adj_matrix.toarray()
+        self.adj_matrix = tf.constant(adj_matrix, dtype=tf.float32)
+        
         self.gat1 = GraphAttention(output_dim // 4, heads=4, dropout=0.1)
         self.gat2 = GraphAttention(output_dim, heads=1, dropout=0.1)
         self.dropout = layers.Dropout(0.1)
@@ -122,14 +80,11 @@ class SpatialProcessor(layers.Layer):
         # Project inputs for residual connection
         input_projected = self.projection(inputs)
         
-        # Get full adjacency matrix with gradient flow preserved
-        adj_matrix = self.adj_layer(inputs, training=training)
-        
-        # Apply graph attention layers
-        x = self.gat1(inputs, adj_matrix, training=training)
+        # Apply graph attention layers with static adjacency matrix
+        x = self.gat1(inputs, self.adj_matrix, training=training)
         x = tf.nn.relu(x)
         x = self.dropout(x, training=training)
-        x = self.gat2(x, adj_matrix, training=training)
+        x = self.gat2(x, self.adj_matrix, training=training)
         
         # Add residual connection
         return self.layer_norm(x + input_projected)
@@ -157,10 +112,10 @@ class TemporalTransformer(layers.Layer):
         return self.layernorm2(x + ffn_output)
 
 class EnhancedMSTSN(Model):
-    def __init__(self, num_nodes):
+    def __init__(self, num_nodes, adj_matrix):
         super().__init__()
         self.num_nodes = num_nodes
-        self.spatial = SpatialProcessor(num_nodes, 32)
+        self.spatial = SpatialProcessor(num_nodes, 32, adj_matrix)
         self.temporal = TemporalTransformer(num_heads=2, ff_dim=64)
         self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
         self.final_dense = layers.Dense(1)
