@@ -111,17 +111,21 @@ class GambiaDataProcessor:
         return features, targets
         
     def create_adjacency_on_demand(self, threshold=10):
-        """Create adjacency matrix only when explicitly requested"""
+        """Create valid 2D adjacency matrix"""
         if self.valid_pixels is None:
-            raise ValueError("Must call process_data before creating adjacency matrix")
-            
-        # Create adjacency matrix if needed for analysis or visualization
+            raise ValueError("Process data before creating adjacency matrix")
+    
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
+        
+        # Ensure binary adjacency matrix
         adj_matrix = (distances <= threshold).astype(np.float32)
-        # Normalize by node degree
-        degree = adj_matrix.sum(axis=1, keepdims=True)
-        adj_matrix = adj_matrix / (degree + 1e-7)  # Avoid division by zero
+        np.fill_diagonal(adj_matrix, 0)  # No self-connections
+        
+        # Validate output shape
+        if adj_matrix.shape != (self.num_nodes, self.num_nodes):
+            raise RuntimeError(f"Adjacency matrix shape mismatch: {adj_matrix.shape} vs ({self.num_nodes}, {self.num_nodes})")
+        
         return scipy.sparse.csr_matrix(adj_matrix)
 
 def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False):
