@@ -70,8 +70,8 @@ class SpatialProcessor(layers.Layer):
             adj_matrix = adj_matrix.toarray()
         self.adj_matrix = tf.constant(adj_matrix, dtype=tf.float32)
         
-        self.gat1 = GraphAttention(output_dim // 4, heads=4, dropout=0.1)
-        self.gat2 = GraphAttention(output_dim, heads=1, dropout=0.1)
+        self.gat1 = GraphAttention(output_dim // 2, heads=4, dropout=0.1)
+        self.gat2 = GraphAttention(output_dim, heads=2, dropout=0.1)
         self.dropout = layers.Dropout(0.1)
         self.layer_norm = layers.LayerNormalization()
         self.projection = layers.Dense(output_dim, use_bias=False)
@@ -94,7 +94,8 @@ class TemporalTransformer(layers.Layer):
         super().__init__()
         self.attn = layers.MultiHeadAttention(num_heads, 32)
         self.ffn = tf.keras.Sequential([
-            layers.Dense(ff_dim, activation='gelu'),
+            layers.Dense(ff_dim*2, activation='gelu'),
+            layers.Dropout(0.2),
             layers.Dense(32)
         ])
         self.layernorm1 = layers.LayerNormalization()
