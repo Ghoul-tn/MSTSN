@@ -24,15 +24,15 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         squared_errors = tf.square(y_true - y_pred) * drought_mask
         sum_squared_errors = tf.reduce_sum(squared_errors)
         total_drought = tf.maximum(tf.reduce_sum(drought_mask), 1e-7)
-        self.drought_rmse.assign_add(tf.sqrt(sum_squared_errors / total_drought))
+        self.drought_rmse.assign_add(tf.sqrt(sum_squared_args / (total_drought + 1e-7)))
         
         # False alarm rate
         false_alarms = tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32) * safe_mask
-        self.false_alarm.assign_add(tf.reduce_sum(false_alarms) / tf.maximum(tf.reduce_sum(safe_mask), 1e-7))
+        self.false_alarm.assign_add(tf.reduce_sum(false_alarms) / (tf.maximum(tf.reduce_sum(safe_mask), 1e-7) + 1e-7))
         
         # Detection rate
         correct_detections = tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32) * drought_mask
-        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / tf.maximum(total_drought, 1e-7))
+        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / (tf.maximum(total_drought, 1e-7) + 1e-7))
         
         self.count.assign_add(1.0)
 
@@ -63,7 +63,7 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     
     drought_mask = tf.cast(y_true < -0.5, tf.float32)
     error = tf.abs(y_pred - y_true)
-    focal_weight = tf.pow(1.0 - tf.exp(-error), gamma)
+    focal_weight = tf.pow(tf.maximum(1.0 - tf.exp(-error), 1e-7), gamma)
     drought_err = tf.reduce_mean(focal_weight * error * drought_mask) * alpha
     
     # Check for NaN in result and replace with small constant
@@ -315,7 +315,8 @@ def main():
             weight_decay=args.weight_decay,
             clipnorm=1.0  
         )
-        
+        if args.mixed_precision:
+            optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
         # Compile with reasonable steps_per_execution for TPU
         steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
