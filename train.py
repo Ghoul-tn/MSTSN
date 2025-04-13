@@ -47,29 +47,22 @@ class DroughtMetrics(tf.keras.metrics.Metric):
             var.assign(0.0)
 
 class R2Score(tf.keras.metrics.Metric):
-    def __init__(self, name='r2_score', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.total_sum = self.add_weight(name='total_sum', initializer='zeros')
-        self.residual_sum = self.add_weight(name='residual_sum', initializer='zeros')
-        self.count = self.add_weight(name='count', initializer='zeros')
-
     def update_state(self, y_true, y_pred, sample_weight=None):
         y_true = tf.reshape(y_true, [-1])
         y_pred = tf.reshape(y_pred, [-1])
+        valid_mask = tf.math.is_finite(y_true) & tf.math.is_finite(y_pred)
+        y_true = tf.boolean_mask(y_true, valid_mask)
+        y_pred = tf.boolean_mask(y_pred, valid_mask)
+        
+        if tf.size(y_true) == 0:
+            return
+            
         mean_y = tf.reduce_mean(y_true)
         total = tf.reduce_sum(tf.square(y_true - mean_y))
         residual = tf.reduce_sum(tf.square(y_true - y_pred))
         self.total_sum.assign_add(total)
         self.residual_sum.assign_add(residual)
         self.count.assign_add(tf.cast(tf.size(y_true), tf.float32))
-
-    def result(self):
-        r2 = 1 - (self.residual_sum / tf.maximum(self.total_sum, 1e-7))
-        return r2
-
-    def reset_state(self):
-        for var in self.variables:
-            var.assign(0.0)
 
 @tf.function
 def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
@@ -169,10 +162,10 @@ def main():
     adj_matrix = processor.create_adjacency_on_demand(threshold=10)
 
     # Calculate proper steps
-    (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
     time_steps_train = train_feat.shape[0] - args.seq_len
-    time_steps_val = val_feat.shape[0] - args.seq_len
     steps_per_epoch = max(1, time_steps_train // args.batch_size)
+    
+    time_steps_val = val_feat.shape[0] - args.seq_len
     validation_steps = max(1, time_steps_val // args.batch_size)
 
     # Dataset creation
@@ -184,14 +177,15 @@ def main():
     # Model configuration
     with strategy.scope():
         model = EnhancedMSTSN(num_nodes=processor.num_nodes, adj_matrix=adj_matrix)
-        lr_schedule = WarmupCosineDecay(args.lr)
-        
         optimizer = tf.keras.optimizers.AdamW(
-            learning_rate=lr_schedule,
+            learning_rate=WarmupCosineDecay(
+                initial_lr=args.lr,
+                warmup_steps=500,  # Longer warmup
+                decay_steps=20000
+            ),
             weight_decay=args.weight_decay,
-            global_clipnorm=1.0
+            global_clipnorm=0.5  # Tighter gradient clipping
         )
-
         model.compile(
             optimizer=optimizer,
             loss=lambda y_true,y_pred: drought_loss(y_true, y_pred, args.alpha, args.gamma),
