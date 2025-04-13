@@ -139,11 +139,10 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
         output_signature=output_signature
     )
 
-    # TPU-optimized pipeline
+    # TPU-optimized pipeline with proper repeat
     return dataset \
         .batch(batch_size, drop_remainder=True) \
-        .prefetch(tf.data.AUTOTUNE) \
-        .cache()
+        .prefetch(tf.data.AUTOTUNE)
 
 def train_val_split(features, targets, train_ratio=0.8):
     """Temporal split of dataset"""
