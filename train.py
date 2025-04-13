@@ -246,9 +246,6 @@ def configure_tpu_options():
     # Enable soft device placement to allow ops without TPU implementation to run on CPU
     tf.config.set_soft_device_placement(True)
     
-    # Disable XLA clustering when on TPU for ops that don't play well with XLA
-    if tf.config.list_physical_devices('TPU'):
-        tf.config.optimizer.set_jit(False)  # Disable XLA on TPU for stability
     
     print("Configured device placement for TPU compatibility")
     
