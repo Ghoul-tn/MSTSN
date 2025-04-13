@@ -85,29 +85,29 @@ class GambiaDataProcessor:
             features[t, :, 0] = np.nan_to_num(ndvi[t, y_idx, x_idx], nan=0.0)
             features[t, :, 2] = np.nan_to_num(lst[t, y_idx, x_idx], nan=0.0)
             targets[t, :] = spi[t, y_idx, x_idx]
-        print("\nPre-preprocessing statistics:")
-        print(f"NDVI range: {features[:,:,0].min():.2f} to {features[:,:,0].max():.2f}")
-        print(f"Soil range: {features[:,:,1].min():.2f} to {features[:,:,1].max():.2f}") 
-        print(f"LST range: {features[:,:,2].min():.2f} to {features[:,:,2].max():.2f}")
+        # 2. Apply domain-specific scaling FIRST
+        print("\nPre-scaling statistics:")
+        print(f"NDVI raw range: {features[:,:,0].min():.2f} to {features[:,:,0].max():.2f}")
+        print(f"Soil raw range: {features[:,:,1].min():.2f} to {features[:,:,1].max():.2f}") 
+        print(f"LST raw range: {features[:,:,2].min():.2f} to {features[:,:,2].max():.2f}")
         print(f"Target SPI range: {targets.min():.2f} to {targets.max():.2f}")
-        # Apply normalizations
-        features[:, :, 0] = (ndvi_processed - 0.15) / 0.35  # NDVI-specific scaling
-        features[:, :, 1] = soil_processed / 100.0          # Soil moisture [0-100] to [0-1]
-        features[:, :, 2] = (lst_processed + 10) / 50.0     # Celsius scaling (assuming -10°C to 40°C range)
+        # Domain-specific scaling
+        features[:, :, 0] = (features[:, :, 0] - 0.15) / 0.35  # NDVI
+        features[:, :, 1] = features[:, :, 1] / 100.0           # Soil moisture
+        features[:, :, 2] = (features[:, :, 2] + 10) / 50.0     # LST
+    
+        # 3. Then apply standard normalization
         features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, self.num_nodes)
         features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, self.num_nodes)
         features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, self.num_nodes)
         targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, self.num_nodes)
-        print("\nPost-preprocessing statistics:")
+    
+        print("\nPost-processing statistics:")
         print(f"NDVI range: {features[:,:,0].min():.2f} to {features[:,:,0].max():.2f}")
         print(f"Soil range: {features[:,:,1].min():.2f} to {features[:,:,1].max():.2f}") 
         print(f"LST range: {features[:,:,2].min():.2f} to {features[:,:,2].max():.2f}")
         print(f"Target SPI range: {targets.min():.2f} to {targets.max():.2f}")
-        print("Data statistics after processing:")
-        print(f"Features - Min: {features.min():.2f}, Max: {features.max():.2f}")
-        print(f"Targets - Min: {targets.min():.2f}, Max: {targets.max():.2f}")
-        print(f"Feature means: {np.mean(features, axis=(0,1))}")
-        print(f"Target mean: {np.mean(targets):.2f}")
+        
         return features, targets
         
     def create_adjacency_on_demand(self, threshold=10):
