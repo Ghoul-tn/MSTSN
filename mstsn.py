@@ -44,8 +44,7 @@ class GraphAttention(layers.Layer):
         
         # Set attention scores to -inf where there are no connections
         neg_inf = -1e9
-        mask_multiplier = (1.0 - adj_mask) * neg_inf
-        attention_scores = attention_scores + mask_multiplier
+        attention_scores = tf.where(tf.equal(adj_mask, 0), tf.ones_like(attention_scores) * neg_inf, attention_scores)
         
         # Apply softmax to get attention weights
         attention_weights = tf.nn.softmax(attention_scores, axis=-1)
@@ -119,7 +118,7 @@ class EnhancedMSTSN(Model):
         self.spatial = SpatialProcessor(num_nodes, 32, adj_matrix)
         self.temporal = TemporalTransformer(num_heads=2, ff_dim=64)
         self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
-        self.final_dense = layers.Dense(1)
+        self.final_dense = layers.Dense(1, activation='tanh')
         self.layernorm = layers.LayerNormalization()
 
     def call(self, inputs, training=False):
