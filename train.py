@@ -138,6 +138,7 @@ def debug_dataset(ds, steps=2):
             print(f"  Y shape: {y_batch.shape}")
             print(f"  X min/max: {tf.reduce_min(x_batch):.4f}/{tf.reduce_max(x_batch):.4f}")
             print(f"  Y min/max: {tf.reduce_min(y_batch):.4f}/{tf.reduce_max(y_batch):.4f}")
+            print(f"  Y mean/std: {tf.reduce_mean(y_batch):.4f}/{tf.math.reduce_std(y_batch):.4f}")
         except StopIteration:
             print("  Dataset exhausted!")
             break
