@@ -7,57 +7,7 @@ import tensorflow as tf
 from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_split
 from mstsn import EnhancedMSTSN
 
-
-class DroughtMetrics(tf.keras.metrics.Metric):
-    def __init__(self, name='drought_metrics', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.drought_rmse = self.add_weight(name='drmse', initializer='zeros')
-        self.false_alarm = self.add_weight(name='fa', initializer='zeros')
-        self.detection_rate = self.add_weight(name='dr', initializer='zeros')
-        self.count = self.add_weight(name='count', initializer='zeros')
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        drought_mask = tf.cast(y_true < -0.5, tf.float32)
-        safe_mask = 1.0 - drought_mask
-        
-        # Drought RMSE
-        squared_errors = tf.square(y_true - y_pred) * drought_mask
-        sum_squared_errors = tf.reduce_sum(squared_errors)
-        total_drought = tf.maximum(tf.reduce_sum(drought_mask), 1e-7)
-        self.drought_rmse.assign_add(tf.sqrt(sum_squared_errors / total_drought))
-        
-        # False alarm rate
-        false_alarms = tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32) * safe_mask
-        self.false_alarm.assign_add(tf.reduce_sum(false_alarms) / tf.maximum(tf.reduce_sum(safe_mask), 1e-7))
-        
-        # Detection rate
-        correct_detections = tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32) * drought_mask
-        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / tf.maximum(total_drought, 1e-7))
-        
-        self.count.assign_add(1.0)
-
-    def result(self):
-        return {
-            'drought_rmse': self.drought_rmse / self.count,
-            'false_alarm': self.false_alarm / self.count,
-            'detection_rate': self.detection_rate / self.count
-        }
-
-    def reset_state(self):
-        for var in self.variables:
-            var.assign(0.0)
-
-@tf.function
-def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
-    # Check for NaNs
-    mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-    y_true = tf.boolean_mask(y_true, mask)
-    y_pred = tf.boolean_mask(y_pred, mask)
-    
-    # If no valid values remain, return small constant loss
-    if tf.equal(tf.size(y_true), 0):
-        return tf.constant(0.1, dtype=tf.float32)
-    
+def _calculate_drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     # Original loss calculation with valid values only
     base_loss = tf.keras.losses.Huber(delta=0.5)(y_true, y_pred)
     
@@ -69,6 +19,158 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     # Check for NaN in result and replace with small constant
     result = base_loss + drought_err
     return tf.where(tf.math.is_nan(result), tf.constant(0.1, dtype=tf.float32), result)
+
+@tf.function
+def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
+    # Check for NaNs
+    mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+    y_true = tf.boolean_mask(y_true, mask)
+    y_pred = tf.boolean_mask(y_pred, mask)
+    
+    # Use tf.cond instead of if
+    return tf.cond(
+        tf.equal(tf.size(y_true), 0),
+        lambda: tf.constant(0.1, dtype=tf.float32),
+        lambda: _calculate_drought_loss(y_true, y_pred, alpha, gamma)
+    )
+
+class DroughtMetrics(tf.keras.metrics.Metric):
+    def __init__(self, name='drought_metrics', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.drought_rmse_metric = tf.keras.metrics.Mean(name='drought_rmse')
+        self.false_alarm_metric = tf.keras.metrics.Mean(name='false_alarm')
+        self.detection_rate_metric = tf.keras.metrics.Mean(name='detection_rate')
+
+    @tf.function(experimental_relax_shapes=True)
+    def _update_drought_metrics(self, y_true, y_pred, drought_mask, total_drought):
+        # Drought RMSE (errors only for drought pixels)
+        squared_errors = tf.square(y_true - y_pred) * drought_mask
+        sum_squared_errors = tf.reduce_sum(squared_errors)
+        batch_drought_rmse = tf.sqrt(sum_squared_errors / total_drought)
+        self.drought_rmse_metric.update_state(batch_drought_rmse)
+        
+        # Detection rate (correctly predicted droughts / actual droughts)
+        correct_detections = tf.reduce_sum(
+            tf.cast(tf.logical_and(y_pred < -0.5, y_true < -0.5), tf.float32)
+        )
+        batch_detection_rate = correct_detections / total_drought
+        return self.detection_rate_metric.update_state(batch_detection_rate)
+    
+    @tf.function(experimental_relax_shapes=True)
+    def _update_false_alarm(self, y_true, y_pred, safe_mask, total_safe):
+        # False alarm rate (wrongly predicted droughts / non-drought pixels)
+        false_alarms = tf.reduce_sum(
+            tf.cast(tf.logical_and(y_pred < -0.5, y_true >= -0.5), tf.float32) * safe_mask
+        )
+        batch_false_alarm = false_alarms / total_safe
+        return self.false_alarm_metric.update_state(batch_false_alarm)
+
+    @tf.function(experimental_relax_shapes=True)
+    def _calculate_metrics(self, y_true, y_pred):
+        # Drought mask (SPI < -0.5 indicates drought conditions)
+        drought_mask = tf.cast(y_true < -0.5, tf.float32)
+        safe_mask = 1.0 - drought_mask
+        
+        # Total drought and non-drought pixels for calculations
+        total_drought = tf.reduce_sum(drought_mask)
+        total_safe = tf.reduce_sum(safe_mask)
+        
+        # Update drought RMSE using tf.cond
+        tf.cond(
+            tf.greater(total_drought, 0),
+            lambda: self._update_drought_metrics(y_true, y_pred, drought_mask, total_drought),
+            lambda: tf.constant(0.0)  # Return dummy value when not updating
+        )
+        
+        # Update false alarm using tf.cond
+        tf.cond(
+            tf.greater(total_safe, 0),
+            lambda: self._update_false_alarm(y_true, y_pred, safe_mask, total_safe),
+            lambda: tf.constant(0.0)  # Return dummy value when not updating
+        )
+        
+        return tf.constant(0.0)  # Return value needed for tf.cond
+
+    @tf.function(experimental_relax_shapes=True)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Create mask for valid values (not NaN)
+        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+        y_true = tf.boolean_mask(y_true, valid_mask)
+        y_pred = tf.boolean_mask(y_pred, valid_mask)
+        
+        # Use tf.cond instead of direct if check
+        tf.cond(
+            tf.equal(tf.size(y_true), 0),
+            lambda: tf.constant(0.0),  # Return dummy value when not calculating
+            lambda: self._calculate_metrics(y_true, y_pred)
+        )
+        
+        return None
+
+    def result(self):
+        return {
+            'drought_rmse': self.drought_rmse_metric.result(),
+            'false_alarm': self.false_alarm_metric.result(),
+            'detection_rate': self.detection_rate_metric.result()
+        }
+
+    def reset_state(self):
+        self.drought_rmse_metric.reset_state()
+        self.false_alarm_metric.reset_state()
+        self.detection_rate_metric.reset_state()
+
+class R2Score(tf.keras.metrics.Metric):
+    def __init__(self, name='r2_score', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.sum_squared_residuals = self.add_weight(
+            name='sum_squared_residuals', initializer='zeros')
+        self.sum_squared_total = self.add_weight(
+            name='sum_squared_total', initializer='zeros')
+    
+    @tf.function(experimental_relax_shapes=True)
+    def _calculate_r2(self, y_true, y_pred):
+        # Calculate mean of y_true
+        y_mean = tf.reduce_mean(y_true)
+        
+        # Sum of squared residuals (predicted vs actual)
+        squared_residuals = tf.reduce_sum(tf.square(y_true - y_pred))
+        self.sum_squared_residuals.assign_add(squared_residuals)
+        
+        # Sum of squared total (actual vs mean)
+        squared_total = tf.reduce_sum(tf.square(y_true - y_mean))
+        self.sum_squared_total.assign_add(squared_total)
+        
+        return tf.constant(0.0)  # Return value needed for tf.cond
+    
+    @tf.function(experimental_relax_shapes=True)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Handle NaNs if present
+        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+        y_true = tf.boolean_mask(y_true, valid_mask)
+        y_pred = tf.boolean_mask(y_pred, valid_mask)
+        
+        # Use tf.cond instead of if
+        tf.cond(
+            tf.equal(tf.size(y_true), 0),
+            lambda: tf.constant(0.0),  # Return dummy value when not calculating
+            lambda: self._calculate_r2(y_true, y_pred)
+        )
+        
+        return None
+        
+    def result(self):
+        # R² = 1 - (sum of squared residuals / sum of squared total)
+        # Handle edge case where denominator is 0
+        return tf.cond(
+            tf.equal(self.sum_squared_total, 0.0),
+            lambda: tf.constant(0.0),
+            lambda: 1.0 - (self.sum_squared_residuals / self.sum_squared_total)
+        )
+            
+    def reset_state(self):
+        self.sum_squared_residuals.assign(0.0)
+        self.sum_squared_total.assign(0.0)
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
     
@@ -143,20 +245,6 @@ def debug_dataset(ds, steps=2):
             break
     print("=== End Debug ===\n")
 
-
-# # Learning rate scheduler for transformer training
-# def get_lr_schedule(initial_lr, warmup_steps=1000):
-#     def lr_schedule(step):
-#         # Linear warmup followed by cosine decay
-#         if step < warmup_steps:
-#             return initial_lr * (step / warmup_steps)
-#         else:
-#             decay_steps = 100000  # Adjust as needed
-#             step_after_warmup = step - warmup_steps
-#             cosine_decay = 0.5 * (1 + tf.cos(tf.constant(np.pi) * step_after_warmup / decay_steps))
-#             return initial_lr * cosine_decay
-    
-#     return lr_schedule
 class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, initial_lr, warmup_steps=1000, decay_steps=100000):
         super().__init__()
@@ -287,108 +375,6 @@ def main():
     
     # Model configuration
     with strategy.scope():
-        # Add new metrics classes
-        class R2Score(tf.keras.metrics.Metric):
-            def __init__(self, name='r2_score', **kwargs):
-                super().__init__(name=name, **kwargs)
-                self.sum_squared_residuals = self.add_weight(
-                    name='sum_squared_residuals', initializer='zeros')
-                self.sum_squared_total = self.add_weight(
-                    name='sum_squared_total', initializer='zeros')
-                
-            def update_state(self, y_true, y_pred, sample_weight=None):
-                # Handle NaNs if present
-                valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-                y_true = tf.boolean_mask(y_true, valid_mask)
-                y_pred = tf.boolean_mask(y_pred, valid_mask)
-                
-                # Skip if no valid data
-                if tf.equal(tf.size(y_true), 0):
-                    return
-                    
-                # Calculate mean of y_true
-                y_mean = tf.reduce_mean(y_true)
-                
-                # Sum of squared residuals (predicted vs actual)
-                squared_residuals = tf.reduce_sum(tf.square(y_true - y_pred))
-                self.sum_squared_residuals.assign_add(squared_residuals)
-                
-                # Sum of squared total (actual vs mean)
-                squared_total = tf.reduce_sum(tf.square(y_true - y_mean))
-                self.sum_squared_total.assign_add(squared_total)
-                
-            def result(self):
-                # R² = 1 - (sum of squared residuals / sum of squared total)
-                # Handle edge case where denominator is 0
-                if tf.equal(self.sum_squared_total, 0.0):
-                    return tf.constant(0.0)
-                return 1.0 - (self.sum_squared_residuals / self.sum_squared_total)
-                
-            def reset_state(self):
-                self.sum_squared_residuals.assign(0.0)
-                self.sum_squared_total.assign(0.0)
-        
-        # Fix the DroughtMetrics class for better NaN handling
-        class DroughtMetrics(tf.keras.metrics.Metric):
-            def __init__(self, name='drought_metrics', **kwargs):
-                super().__init__(name=name, **kwargs)
-                self.drought_rmse_metric = tf.keras.metrics.Mean(name='drought_rmse')
-                self.false_alarm_metric = tf.keras.metrics.Mean(name='false_alarm')
-                self.detection_rate_metric = tf.keras.metrics.Mean(name='detection_rate')
-
-            def update_state(self, y_true, y_pred, sample_weight=None):
-                # Create mask for valid values (not NaN) - important for robustness
-                valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-                y_true = tf.boolean_mask(y_true, valid_mask)
-                y_pred = tf.boolean_mask(y_pred, valid_mask)
-                
-                # Skip processing if no valid data
-                if tf.equal(tf.size(y_true), 0):
-                    return
-                    
-                # Drought mask (SPI < -0.5 indicates drought conditions)
-                drought_mask = tf.cast(y_true < -0.5, tf.float32)
-                safe_mask = 1.0 - drought_mask
-                
-                # Total drought and non-drought pixels for calculations
-                total_drought = tf.reduce_sum(drought_mask)
-                total_safe = tf.reduce_sum(safe_mask)
-                
-                # Skip calculations that would result in division by zero
-                if total_drought > 0:
-                    # Drought RMSE (errors only for drought pixels)
-                    squared_errors = tf.square(y_true - y_pred) * drought_mask
-                    sum_squared_errors = tf.reduce_sum(squared_errors)
-                    batch_drought_rmse = tf.sqrt(sum_squared_errors / total_drought)
-                    self.drought_rmse_metric.update_state(batch_drought_rmse)
-                    
-                    # Detection rate (correctly predicted droughts / actual droughts)
-                    correct_detections = tf.reduce_sum(
-                        tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32)
-                    )
-                    batch_detection_rate = correct_detections / total_drought
-                    self.detection_rate_metric.update_state(batch_detection_rate)
-                
-                if total_safe > 0:
-                    # False alarm rate (wrongly predicted droughts / non-drought pixels)
-                    false_alarms = tf.reduce_sum(
-                        tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32)
-                    )
-                    batch_false_alarm = false_alarms / total_safe
-                    self.false_alarm_metric.update_state(batch_false_alarm)
-
-            def result(self):
-                return {
-                    'drought_rmse': self.drought_rmse_metric.result(),
-                    'false_alarm': self.false_alarm_metric.result(),
-                    'detection_rate': self.detection_rate_metric.result()
-                }
-
-            def reset_state(self):
-                self.drought_rmse_metric.reset_state()
-                self.false_alarm_metric.reset_state()
-                self.detection_rate_metric.reset_state()
-
         model = EnhancedMSTSN(num_nodes=processor.num_nodes, adj_matrix=adj_matrix)
         
         # Create a small dummy input with the correct dimensions for testing
