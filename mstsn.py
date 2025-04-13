@@ -62,11 +62,14 @@ class GraphAttention(layers.Layer):
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, output_dim, adj_matrix):
         super().__init__()
-        # Add adjacency matrix normalization
+        # Convert sparse matrix to dense if needed
+        if scipy.sparse.issparse(adj_matrix):
+            adj_matrix = adj_matrix.toarray()
+            
+        # Normalize adjacency matrix
         adj_matrix = self.normalize_adjacency(adj_matrix)
         self.adj_matrix = tf.constant(adj_matrix, dtype=tf.float32)
         
-        # Enhanced GAT layers with residual connections
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
         self.dropout = layers.Dropout(0.2)
@@ -74,7 +77,14 @@ class SpatialProcessor(layers.Layer):
 
     def normalize_adjacency(self, adj_matrix):
         """Row-normalize adjacency matrix"""
-        degree = np.sum(adj_matrix, axis=1, keepdims=True)
+        # Convert to numpy array if not already
+        adj_matrix = np.array(adj_matrix)
+        
+        # Calculate degree matrix
+        degree = np.sum(adj_matrix, axis=1)
+        degree = np.reshape(degree, (-1, 1))  # Equivalent to keepdims=True
+        
+        # Normalize and prevent division by zero
         return adj_matrix / (degree + 1e-6)
 
     def call(self, inputs, training=False):
