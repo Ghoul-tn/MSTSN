@@ -281,10 +281,12 @@ def main():
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
-            clipvalue=0.5  
-        )
+            global_clipnorm=0.5,  # Tighter gradient clipping
+            clipvalue=0.3,
+            epsilon=1e-7  # Numerical stability
+        )        
         if args.mixed_precision:
-            optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
+            optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, initial_scale=2**12)
         # Compile with reasonable steps_per_execution for TPU
         steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
