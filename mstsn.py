@@ -117,9 +117,19 @@ class EnhancedMSTSN(Model):
         self.num_nodes = num_nodes
         self.spatial = SpatialProcessor(num_nodes, 32, adj_matrix)
         self.temporal = TemporalTransformer(num_heads=2, ff_dim=64)
-        self.cross_attn = layers.MultiHeadAttention(num_heads=2, key_dim=32)
-        self.final_dense = layers.Dense(1)
-        self.layernorm = layers.LayerNormalization()
+        self.cross_attn = layers.MultiHeadAttention(
+            num_heads=2, 
+            key_dim=32,
+            kernel_initializer='glorot_uniform'  # Explicit initialization
+        )
+        self.final_dense = layers.Dense(
+            1,
+            kernel_initializer=tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01)
+        )
+        self.layernorm = layers.LayerNormalization(epsilon=1e-6)
+        
+        # Add small dropout for regularization
+        self.dropout = layers.Dropout(0.1)
 
     def call(self, inputs, training=False):
         batch_size = tf.shape(inputs)[0]
@@ -160,9 +170,6 @@ class EnhancedMSTSN(Model):
         # Apply cross-attention
         fused = self.cross_attn(spatial_feats, temporal_feats)
         fused = self.layernorm(fused)
+        fused = self.dropout(fused, training=training)  # Add dropout
         
-        # Final prediction
-        node_preds = self.final_dense(fused)  # [batch, num_nodes, 1]
-        
-        # Remove last dimension to match target shape [batch, num_nodes]
-        return tf.squeeze(node_preds, axis=-1)
+        return tf.squeeze(self.final_dense(fused), axis=-1)
