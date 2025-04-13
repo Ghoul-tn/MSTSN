@@ -66,23 +66,35 @@ class SpatialProcessor(layers.Layer):
         self.projection = layers.Dense(output_dim)  # Add this line
         
         # Rest of existing code remains the same
-        adj_matrix = self.normalize_adjacency(adj_matrix)
-        self.adj_matrix = tf.constant(adj_matrix, dtype=tf.float32)
+        if scipy.sparse.issparse(adj_matrix):
+            adj_matrix = adj_matrix.toarray()
+        adj_matrix = np.asarray(adj_matrix, dtype=np.float32)        
+        if adj_matrix.shape != (num_nodes, num_nodes):
+            raise ValueError(f"Adjacency matrix shape {adj_matrix.shape} doesn't match num_nodes {num_nodes}")        
+        self.adj_matrix = tf.constant(
+            self.normalize_adjacency(adj_matrix),
+            dtype=tf.float32
+        )
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
         self.dropout = layers.Dropout(0.2)
         self.layer_norm = layers.LayerNormalization(epsilon=1e-6)
 
     def normalize_adjacency(self, adj_matrix):
-        """Row-normalize adjacency matrix"""
-        # Convert to numpy array if not already
-        adj_matrix = np.array(adj_matrix)
+        """Row-normalize adjacency matrix with proper shape checks"""
+        # Ensure 2D array conversion
+        if scipy.sparse.issparse(adj_matrix):
+            adj_matrix = adj_matrix.toarray()
+        adj_matrix = np.asarray(adj_matrix, dtype=np.float32)
         
+        # Validate matrix dimensions
+        if adj_matrix.ndim != 2:
+            raise ValueError(f"Adjacency matrix must be 2D, got {adj_matrix.ndim}D input")
+        if adj_matrix.shape[0] != adj_matrix.shape[1]:
+            raise ValueError(f"Adjacency matrix must be square, got shape {adj_matrix.shape}")
+    
         # Calculate degree matrix
-        degree = np.sum(adj_matrix, axis=1)
-        degree = np.reshape(degree, (-1, 1))  # Equivalent to keepdims=True
-        
-        # Normalize and prevent division by zero
+        degree = np.sum(adj_matrix, axis=1, keepdims=True)  # Keep dimensions for broadcasting
         return adj_matrix / (degree + 1e-6)
 
     def call(self, inputs, training=False):
