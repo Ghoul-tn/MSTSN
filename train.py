@@ -106,6 +106,13 @@ def configure_distribute_strategy(use_tpu=True):
             tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
             tf.config.experimental_connect_to_cluster(tpu)
             tf.tpu.experimental.initialize_tpu_system(tpu)
+            tf.config.experimental.enable_op_determinism()
+                # Add explicit options for TPU
+            tpu_options = tf.distribute.TPUStrategy.RunOptions(
+                experimental_host_threads_enabled=True,
+                experimental_slack=False
+            )
+            strategy_scope_options = {"run_options": tpu_options}
             strategy = tf.distribute.TPUStrategy(tpu)
             print(f"Running on TPU: {tpu.master()}")
             print(f"TPU cores: {strategy.num_replicas_in_sync}")
@@ -119,10 +126,12 @@ def configure_distribute_strategy(use_tpu=True):
     if gpus:
         print(f"Found {len(gpus)} GPU(s). Using MirroredStrategy.")
         strategy = tf.distribute.MirroredStrategy()
+        strategy_scope_options = {}
         return strategy, False
     else:
         print("No GPUs found. Using default strategy (CPU).")
         strategy = tf.distribute.get_strategy()
+        strategy_scope_options = {}
         return strategy, False
 
 def debug_dataset(ds, steps=2):
@@ -250,17 +259,18 @@ def main():
     
     # Create datasets
     with strategy.scope():
-        train_ds = create_tf_dataset(
+        train_ds = create_tf_dataset_v2(
             train_feat, train_targ,
             seq_len=args.seq_len,
             batch_size=global_batch_size,
             training=True
         )
         
-        val_ds = create_tf_dataset(
+        val_ds = create_tf_dataset_v2(
             val_feat, val_targ,
             seq_len=args.seq_len,
-            batch_size=global_batch_size
+            batch_size=global_batch_size,
+            training=False  # Validation mode
         )
         
         # Debug dataset to verify shapes
