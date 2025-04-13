@@ -44,7 +44,8 @@ class GraphAttention(layers.Layer):
         
         # Set attention scores to -inf where there are no connections
         neg_inf = -1e9
-        attention_scores = tf.where(tf.equal(adj_mask, 0), tf.ones_like(attention_scores) * neg_inf, attention_scores)
+        mask_multiplier = (1.0 - adj_mask) * neg_inf
+        attention_scores = attention_scores + mask_multiplier
         
         # Apply softmax to get attention weights
         attention_weights = tf.nn.softmax(attention_scores, axis=-1)
