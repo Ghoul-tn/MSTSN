@@ -266,12 +266,12 @@ def main():
         debug_dataset(train_ds)
     
     # Calculate steps per epoch - with proper estimation for your dataset size
-    time_steps = features.shape[0] - args.seq_len
-    samples_per_step = processor.num_nodes  # Each time point has processor.num_nodes samples
-    total_samples = time_steps * samples_per_step  # Total number of potential samples
+    train_samples = train_feat.shape[0] - args.seq_len
+    steps_per_epoch = max(1, train_samples // global_batch_size)
     
-    steps_per_epoch = max(1, total_samples // (global_batch_size * 100))  # Divide by 100 to make epochs faster
-    validation_steps = max(1, (total_samples // 5) // (global_batch_size * 100))  # 20% for validation
+    # Calculate validation steps
+    val_samples = val_feat.shape[0] - args.seq_len
+    validation_steps = max(1, val_samples // global_batch_size)
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
