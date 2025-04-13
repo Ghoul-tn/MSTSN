@@ -8,67 +8,20 @@ from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_s
 from mstsn import EnhancedMSTSN
 
 
-class DroughtMetrics(tf.keras.metrics.Metric):
-    def __init__(self, name='drought_metrics', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.drought_rmse = self.add_weight(name='drmse', initializer='zeros')
-        self.false_alarm = self.add_weight(name='fa', initializer='zeros')
-        self.detection_rate = self.add_weight(name='dr', initializer='zeros')
-        self.count = self.add_weight(name='count', initializer='zeros')
+def get_metrics():
+    return [
+        tf.keras.metrics.RootMeanSquaredError(name='rmse'),
+        tf.keras.metrics.MeanAbsoluteError(name='mae'),
+        tf.keras.metrics.MeanSquaredError(name='mse')
+    ]
 
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        drought_mask = tf.cast(y_true < -0.5, tf.float32)
-        safe_mask = 1.0 - drought_mask
-        
-        # Drought RMSE
-        squared_errors = tf.square(y_true - y_pred) * drought_mask
-        sum_squared_errors = tf.reduce_sum(squared_errors)
-        total_drought = tf.maximum(tf.reduce_sum(drought_mask), 1e-7)
-        self.drought_rmse.assign_add(tf.sqrt(sum_squared_errors / (total_drought + 1e-7)))
-        
-        # False alarm rate
-        false_alarms = tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32) * safe_mask
-        self.false_alarm.assign_add(tf.reduce_sum(false_alarms) / (tf.maximum(tf.reduce_sum(safe_mask), 1e-7) + 1e-7))
-        
-        # Detection rate
-        correct_detections = tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32) * drought_mask
-        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / (tf.maximum(total_drought, 1e-7) + 1e-7))
-        
-        self.count.assign_add(1.0)
-
-    def result(self):
-        return {
-            'drought_rmse': self.drought_rmse / self.count,
-            'false_alarm': self.false_alarm / self.count,
-            'detection_rate': self.detection_rate / self.count
-        }
-
-    def reset_state(self):
-        for var in self.variables:
-            var.assign(0.0)
-
-@tf.function
-def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
-    # Check for NaNs
-    mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-    y_true = tf.boolean_mask(y_true, mask)
-    y_pred = tf.boolean_mask(y_pred, mask)
-    
-    # If no valid values remain, return small constant loss
-    if tf.equal(tf.size(y_true), 0):
-        return tf.constant(0.1, dtype=tf.float32)
-    
-    # Original loss calculation with valid values only
-    base_loss = tf.keras.losses.Huber(delta=0.5)(y_true, y_pred)
-    
-    drought_mask = tf.cast(y_true < -0.5, tf.float32)
-    error = tf.abs(y_pred - y_true)
-    focal_weight = tf.pow(tf.maximum(1.0 - tf.exp(-error), 1e-7), gamma)
-    drought_err = tf.reduce_mean(focal_weight * error * drought_mask) * alpha
-    
-    # Check for NaN in result and replace with small constant
-    result = base_loss + drought_err
-    return tf.where(tf.math.is_nan(result), tf.constant(0.1, dtype=tf.float32), result)
+# Simplified loss function
+def drought_loss(y_true, y_pred):
+    mask = tf.math.logical_not(tf.math.is_nan(y_true))
+    return tf.keras.losses.mean_squared_error(
+        tf.boolean_mask(y_true, mask),
+        tf.boolean_mask(y_pred, mask)
+    )
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
     
@@ -324,12 +277,8 @@ def main():
         
         model.compile(
             optimizer=optimizer,
-            loss=lambda y_true,y_pred: drought_loss(y_true, y_pred, args.alpha, args.gamma),
-            metrics=[
-                tf.keras.metrics.RootMeanSquaredError(name='rmse'),
-                tf.keras.metrics.MeanAbsoluteError(name='mae'),
-                DroughtMetrics()
-            ],
+            loss=drought_loss,
+            metrics=get_metrics(),
             steps_per_execution=steps_per_execution
         )
 
