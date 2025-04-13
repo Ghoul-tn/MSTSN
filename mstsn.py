@@ -132,13 +132,13 @@ class EnhancedMSTSN(Model):
         spatial_out = self.spatial(spatial_in, training=training)
         
         # Reshape back to separate batch and sequence dimensions
-        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
+        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 64])
         
         # Temporal processing - handle each node separately
         # Reshape to [batch*num_nodes, seq_len, features]
         temporal_in = tf.reshape(
             tf.transpose(spatial_out, [0, 2, 1, 3]), 
-            [batch_size * self.num_nodes, seq_len, 32]
+            [batch_size * self.num_nodes, seq_len, 64]
         )
         
         # Apply temporal transformer
@@ -147,7 +147,7 @@ class EnhancedMSTSN(Model):
         # Reshape back to [batch, num_nodes, seq_len, features]
         temporal_out = tf.reshape(
             temporal_out, 
-            [batch_size, self.num_nodes, seq_len, 32]
+            [batch_size, self.num_nodes, seq_len, 64]
         )
         
         # Cross-attention between spatial and temporal features
