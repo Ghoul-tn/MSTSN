@@ -102,8 +102,10 @@ class GambiaDataProcessor:
         # Create adjacency matrix if needed for analysis or visualization
         coords = np.column_stack(self.valid_pixels)
         distances = np.sqrt(((coords[:, None] - coords) ** 2).sum(-1))
-        adj_matrix = (distances <= threshold).astype(float)
-        np.fill_diagonal(adj_matrix, 0)
+        adj_matrix = (distances <= threshold).astype(np.float32)
+        # Normalize by node degree
+        degree = adj_matrix.sum(axis=1, keepdims=True)
+        adj_matrix = adj_matrix / (degree + 1e-7)  # Avoid division by zero
         return scipy.sparse.csr_matrix(adj_matrix)
 
 def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False):
