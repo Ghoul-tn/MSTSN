@@ -139,7 +139,7 @@ class R2Score(tf.keras.metrics.Metric):
         # Use tf.cond instead of if statement for TPU compatibility
         tf.cond(
             tf.equal(tf.size(y_true_valid), 0),
-            lambda: tf.no_op(),  # No-op if no valid data
+            lambda: tf.constant(0.0),  # Return a constant instead of no_op
             lambda: self._update_state_impl(y_true_valid, y_pred_valid)
         )
         
@@ -159,7 +159,7 @@ class R2Score(tf.keras.metrics.Metric):
         # Update state variables
         self.sum_squared_residuals.assign_add(squared_residuals)
         self.sum_squared_total.assign_add(squared_total)
-        return None
+        return tf.constant(0.0)  # Return a constant value
         
     def result(self):
         # Avoid division by zero
