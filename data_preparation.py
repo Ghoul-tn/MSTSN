@@ -91,7 +91,11 @@ class GambiaDataProcessor:
         features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, self.num_nodes)
         features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, self.num_nodes)
         targets = self.scalers['spi'].fit_transform(targets.reshape(-1, 1)).reshape(287, self.num_nodes)
-
+        print("Data statistics after processing:")
+        print(f"Features - Min: {features.min():.2f}, Max: {features.max():.2f}")
+        print(f"Targets - Min: {targets.min():.2f}, Max: {targets.max():.2f}")
+        print(f"Feature means: {np.mean(features, axis=(0,1))}")
+        print(f"Target mean: {np.mean(targets):.2f}")
         return features, targets
         
     def create_adjacency_on_demand(self, threshold=10):
