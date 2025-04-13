@@ -54,7 +54,9 @@ class DroughtMetrics(tf.keras.metrics.Metric):
             tf.cast(tf.logical_and(y_pred < -0.5, y_true < -0.5), tf.float32)
         )
         batch_detection_rate = correct_detections / total_drought
-        return self.detection_rate_metric.update_state(batch_detection_rate)
+        self.detection_rate_metric.update_state(batch_detection_rate)
+        # Return dummy tensor to match the shape of the other branch
+        return tf.constant(0.0)
     
     @tf.function(experimental_relax_shapes=True)
     def _update_false_alarm(self, y_true, y_pred, safe_mask, total_safe):
@@ -63,7 +65,9 @@ class DroughtMetrics(tf.keras.metrics.Metric):
             tf.cast(tf.logical_and(y_pred < -0.5, y_true >= -0.5), tf.float32) * safe_mask
         )
         batch_false_alarm = false_alarms / total_safe
-        return self.false_alarm_metric.update_state(batch_false_alarm)
+        self.false_alarm_metric.update_state(batch_false_alarm)
+        # Return dummy tensor to match the shape of the other branch
+        return tf.constant(0.0)
 
     @tf.function(experimental_relax_shapes=True)
     def _calculate_metrics(self, y_true, y_pred):
@@ -76,20 +80,51 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         total_safe = tf.reduce_sum(safe_mask)
         
         # Update drought RMSE using tf.cond
-        tf.cond(
+        # Ensure both branches return same type
+        _ = tf.cond(
             tf.greater(total_drought, 0),
             lambda: self._update_drought_metrics(y_true, y_pred, drought_mask, total_drought),
-            lambda: tf.constant(0.0)  # Return dummy value when not updating
+            lambda: tf.constant(0.0)  # Both branches now return a scalar
         )
         
         # Update false alarm using tf.cond
-        tf.cond(
+        # Ensure both branches return same type
+        _ = tf.cond(
             tf.greater(total_safe, 0),
             lambda: self._update_false_alarm(y_true, y_pred, safe_mask, total_safe),
-            lambda: tf.constant(0.0)  # Return dummy value when not updating
+            lambda: tf.constant(0.0)  # Both branches now return a scalar
         )
         
         return tf.constant(0.0)  # Return value needed for tf.cond
+
+    @tf.function(experimental_relax_shapes=True)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Create mask for valid values (not NaN)
+        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+        y_true = tf.boolean_mask(y_true, valid_mask)
+        y_pred = tf.boolean_mask(y_pred, valid_mask)
+        
+        # Use tf.cond instead of direct if check
+        # Make sure to use the result to avoid mismatched branches
+        _ = tf.cond(
+            tf.equal(tf.size(y_true), 0),
+            lambda: tf.constant(0.0),  # Return dummy value when not calculating
+            lambda: self._calculate_metrics(y_true, y_pred)
+        )
+        
+        return None
+
+    def result(self):
+        return {
+            'drought_rmse': self.drought_rmse_metric.result(),
+            'false_alarm': self.false_alarm_metric.result(),
+            'detection_rate': self.detection_rate_metric.result()
+        }
+
+    def reset_state(self):
+        self.drought_rmse_metric.reset_state()
+        self.false_alarm_metric.reset_state()
+        self.detection_rate_metric.reset_state()
 
     @tf.function(experimental_relax_shapes=True)
     def update_state(self, y_true, y_pred, sample_weight=None):
