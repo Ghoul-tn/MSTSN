@@ -313,7 +313,7 @@ def main():
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
-            clipnorm=1.0  
+            clipvalue=0.5  
         )
         if args.mixed_precision:
             optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
