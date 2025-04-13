@@ -112,21 +112,22 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
     def generator():
         max_time = features.shape[0] - seq_len
         for idx in range(max_time):
-            # Ensure full sequence length
-            if idx + seq_len > features.shape[0]:
-                continue
-            x_seq = features[idx:idx+seq_len]
-            y_target = targets[idx+seq_len-1]
-            
-            # Verify no NaN in sequence
-            if np.any(np.isnan(x_seq)) or np.any(np.isnan(y_target)):
-                continue
-                
+            start_idx = max(0, idx)
+            end_idx = start_idx + seq_len
+            x_seq = features[start_idx:end_idx]
+            y_target = targets[end_idx-1]  # Predict last step in sequence
+
+            # Pad if sequence is too short
+            if len(x_seq) < seq_len:
+                padding = np.zeros((seq_len - len(x_seq), *x_seq.shape[1:]), dtype=np.float32)
+                x_seq = np.concatenate([padding, x_seq])
+
+            # Apply random masking augmentation
+            if training:
+                mask = np.random.rand(*x_seq.shape) < 0.1
+                x_seq[mask] = 0
+
             yield x_seq, y_target
-    
-    # Add dataset caching and proper shuffling
-    dataset = tf.data.Dataset.from_generator(generator, output_signature=output_signature)
-    dataset = dataset.shuffle(1000, reshuffle_each_iteration=True)
 
     output_signature = (
         tf.TensorSpec(shape=(seq_len, None, 3), dtype=tf.float32),  # [seq_len, nodes, features]
