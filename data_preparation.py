@@ -105,63 +105,54 @@ class GambiaDataProcessor:
         np.fill_diagonal(adj_matrix, 0)
         return scipy.sparse.csr_matrix(adj_matrix)
 
-def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False):
-    """Creates TensorFlow dataset with TPU-optimized pipeline"""
+def create_tf_dataset_v2(features, targets, seq_len=12, batch_size=16, training=False):
+    """Creates a TensorFlow dataset using tf.data operations instead of generators"""
     
-    def generator():
-        max_time = features.shape[0] - seq_len
-        indices = list(range(max_time))
+    # Pre-generate all possible windows (this is memory-intensive but more reliable)
+    max_time = features.shape[0] - seq_len
+    
+    # Create indices array and convert to tensors
+    indices = np.arange(max_time)
+    indices_tensor = tf.convert_to_tensor(indices, dtype=tf.int32)
+    
+    # Create base dataset from indices
+    ds = tf.data.Dataset.from_tensor_slices(indices_tensor)
+    
+    # Convert features and targets to tensors once
+    features_tensor = tf.convert_to_tensor(features, dtype=tf.float32)
+    targets_tensor = tf.convert_to_tensor(targets, dtype=tf.float32)
+    
+    # Map function to extract windows
+    def extract_window(idx):
+        x = features_tensor[idx:idx+seq_len]
+        y = targets_tensor[idx+seq_len-1]
         
-        # For training, use infinite shuffling to prevent StopIteration
+        # Data augmentation for training
         if training:
-            # Better shuffling approach
-            while True:
-                np.random.shuffle(indices)
-                for idx in indices:
-                    start_idx = idx
-                    end_idx = start_idx + seq_len
-                    x_seq = features[start_idx:end_idx]
-                    y_target = targets[end_idx-1]
-                    
-                    # Apply random masking augmentation if training
-                    mask = np.random.rand(*x_seq.shape) < 0.1
-                    x_seq = x_seq.copy()
-                    x_seq[mask] = 0
-                    
-                    # Check for NaN values before yielding
-                    if np.isnan(x_seq).any() or np.isnan(y_target).any():
-                        continue  # Skip this batch if NaNs are present
-                        
-                    yield x_seq, y_target
-        else:
-            # For validation/testing, go through once
-            for idx in indices:
-                start_idx = idx
-                end_idx = start_idx + seq_len
-                x_seq = features[start_idx:end_idx]
-                y_target = targets[end_idx-1]
-                
-                # Check for NaN values
-                if not np.isnan(x_seq).any() and not np.isnan(y_target).any():
-                    yield x_seq, y_target
-
-    output_signature = (
-        tf.TensorSpec(shape=(seq_len, features.shape[1], 3), dtype=tf.float32),
-        tf.TensorSpec(shape=(features.shape[1],), dtype=tf.float32)
-    )
-
-    dataset = tf.data.Dataset.from_generator(
-        generator,
-        output_signature=output_signature
-    )
-
-    # TPU-optimized pipeline with prefetch and cache
-    dataset = dataset.batch(batch_size, drop_remainder=True)
-    if training:
-        # Explicitly make dataset infinite with repeat() for TPU
-        dataset = dataset.repeat()
+            # Create random mask (same shape as x)
+            mask = tf.cast(tf.random.uniform(tf.shape(x)) < 0.1, tf.float32)
+            x = x * (1.0 - mask)  # Apply mask (set masked values to 0)
+        
+        return x, y
     
-    return dataset.prefetch(tf.data.AUTOTUNE)
+    # Apply the mapping function
+    ds = ds.map(extract_window, num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # Shuffle, batch, and optimize for TPU
+    if training:
+        # Large buffer for better shuffling
+        ds = ds.shuffle(buffer_size=min(10000, max_time))
+        # Make it truly infinite
+        ds = ds.repeat()
+    
+    ds = ds.batch(batch_size, drop_remainder=True)
+    
+    # Validation dataset should also be repeated for TPU
+    if not training:
+        ds = ds.repeat()
+        
+    # Optimize with prefetch
+    return ds.prefetch(tf.data.AUTOTUNE)
     
 def train_val_split(features, targets, train_ratio=0.8):
     """Temporal split of dataset"""
