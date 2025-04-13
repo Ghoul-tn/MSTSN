@@ -167,17 +167,6 @@ def configure_tpu_options():
     tf.config.set_soft_device_placement(True)
     print("Enabled soft device placement for TPU compatibility")
 
-# Add gradient monitoring callback
-class GradientMonitor(tf.keras.callbacks.Callback):
-    def on_batch_end(self, batch, logs=None):
-        grads = [tf.reduce_mean(tf.abs(g)) for g in self.model.optimizer.get_gradients()]
-        print(f"Mean gradient magnitude: {np.mean(grads):.2e}")
-
-# Enable numeric checking
-tf.debugging.enable_check_numerics(
-    stack_height_limit=30,
-    path_length_limit=50
-)
 
 def main():
     args = parse_args()
