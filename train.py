@@ -22,12 +22,15 @@ def _calculate_drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
 
 @tf.function
 def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
-    # Check for NaNs
+    # Check for NaNs and replace them with valid values to prevent propagation
+    y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
+    y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
+    
+    # Create a valid mask (not needed after NaN replacement, but kept for safety)
     mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
     y_true = tf.boolean_mask(y_true, mask)
     y_pred = tf.boolean_mask(y_pred, mask)
     
-    # Use tf.cond instead of if
     return tf.cond(
         tf.equal(tf.size(y_true), 0),
         lambda: tf.constant(0.1, dtype=tf.float32),
@@ -44,19 +47,12 @@ class DroughtMetrics(tf.keras.metrics.Metric):
 
     @tf.function(experimental_relax_shapes=True)
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Handle NaNs if present
-        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-        y_true_valid = tf.boolean_mask(y_true, valid_mask)
-        y_pred_valid = tf.boolean_mask(y_pred, valid_mask)
+        # Replace NaNs with zeros to ensure operations work
+        y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
+        y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
         
-        # Use tf.cond instead of if statement for TPU compatibility
-        tf.cond(
-            tf.equal(tf.size(y_true_valid), 0),
-            lambda: tf.constant(0.0),  # Return a constant instead of no_op
-            lambda: self._update_state_impl(y_true_valid, y_pred_valid)
-        )
-        
-        # Always return something from update_state when using tf.function
+        # Proceed with calculations - no need for boolean mask after NaN replacement
+        self._update_state_impl(y_true, y_pred)
         return tf.constant(0.0)
     
     def _update_state_impl(self, y_true, y_pred):
@@ -287,7 +283,12 @@ def configure_tpu_options():
     """Configure TF to handle unsupported ops by running them on CPU"""
     # Enable soft device placement to allow ops without TPU implementation to run on CPU
     tf.config.set_soft_device_placement(True)
-    print("Enabled soft device placement for TPU compatibility")
+    
+    # Disable XLA clustering when on TPU for ops that don't play well with XLA
+    if tf.config.list_physical_devices('TPU'):
+        tf.config.optimizer.set_jit(False)  # Disable XLA on TPU for stability
+    
+    print("Configured device placement for TPU compatibility")
     
 def main():
     args = parse_args()
