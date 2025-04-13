@@ -111,27 +111,36 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
     
     def generator():
         max_time = features.shape[0] - seq_len
-        for idx in range(max_time):
-            start_idx = max(0, idx)
-            end_idx = start_idx + seq_len
-            x_seq = features[start_idx:end_idx]
-            y_target = targets[end_idx-1]  # Predict last step in sequence
-
-            # Pad if sequence is too short
-            if len(x_seq) < seq_len:
-                padding = np.zeros((seq_len - len(x_seq), *x_seq.shape[1:]), dtype=np.float32)
-                x_seq = np.concatenate([padding, x_seq])
-
-            # Apply random masking augmentation
-            if training:
-                mask = np.random.rand(*x_seq.shape) < 0.1
-                x_seq[mask] = 0
-
-            yield x_seq, y_target
+        indices = list(range(max_time))
+        
+        # For training, use infinite shuffling to prevent StopIteration
+        if training:
+            while True:
+                np.random.shuffle(indices)
+                for idx in indices:
+                    start_idx = idx
+                    end_idx = start_idx + seq_len
+                    x_seq = features[start_idx:end_idx]
+                    y_target = targets[end_idx-1]
+                    
+                    # Apply random masking augmentation if training
+                    mask = np.random.rand(*x_seq.shape) < 0.1
+                    x_seq = x_seq.copy()  # Create a copy to avoid modifying original
+                    x_seq[mask] = 0
+                    
+                    yield x_seq, y_target
+        else:
+            # For validation/testing, go through once
+            for idx in indices:
+                start_idx = idx
+                end_idx = start_idx + seq_len
+                x_seq = features[start_idx:end_idx]
+                y_target = targets[end_idx-1]
+                yield x_seq, y_target
 
     output_signature = (
-        tf.TensorSpec(shape=(seq_len, None, 3), dtype=tf.float32),  # [seq_len, nodes, features]
-        tf.TensorSpec(shape=(None,), dtype=tf.float32)              # [nodes]
+        tf.TensorSpec(shape=(seq_len, None, 3), dtype=tf.float32),
+        tf.TensorSpec(shape=(None,), dtype=tf.float32)
     )
 
     dataset = tf.data.Dataset.from_generator(
@@ -139,12 +148,9 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
         output_signature=output_signature
     )
 
-    # TPU-optimized pipeline
-    return dataset \
-        .batch(batch_size, drop_remainder=True) \
-        .prefetch(tf.data.AUTOTUNE) \
-        .cache()
-
+    # TPU-optimized pipeline - cache after batch for efficiency
+    return dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    
 def train_val_split(features, targets, train_ratio=0.8):
     """Temporal split of dataset"""
     total_samples = features.shape[0] - 12  # seq_len=12
