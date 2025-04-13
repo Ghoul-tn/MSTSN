@@ -53,8 +53,7 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
     y_true = tf.boolean_mask(y_true, mask)
     y_pred = tf.boolean_mask(y_pred, mask)
-    y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
-    y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
+    
     # If no valid values remain, return small constant loss
     if tf.equal(tf.size(y_true), 0):
         return tf.constant(0.1, dtype=tf.float32)
@@ -106,13 +105,6 @@ def configure_distribute_strategy(use_tpu=True):
             tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
             tf.config.experimental_connect_to_cluster(tpu)
             tf.tpu.experimental.initialize_tpu_system(tpu)
-            tf.config.experimental.enable_op_determinism()
-                # Add explicit options for TPU
-            tpu_options = tf.distribute.TPUStrategy.RunOptions(
-                experimental_host_threads_enabled=True,
-                experimental_slack=False
-            )
-            strategy_scope_options = {"run_options": tpu_options}
             strategy = tf.distribute.TPUStrategy(tpu)
             print(f"Running on TPU: {tpu.master()}")
             print(f"TPU cores: {strategy.num_replicas_in_sync}")
@@ -126,12 +118,10 @@ def configure_distribute_strategy(use_tpu=True):
     if gpus:
         print(f"Found {len(gpus)} GPU(s). Using MirroredStrategy.")
         strategy = tf.distribute.MirroredStrategy()
-        strategy_scope_options = {}
         return strategy, False
     else:
         print("No GPUs found. Using default strategy (CPU).")
         strategy = tf.distribute.get_strategy()
-        strategy_scope_options = {}
         return strategy, False
 
 def debug_dataset(ds, steps=2):
@@ -231,8 +221,7 @@ def main():
     print(f"NaN in targets: {np.isnan(targets).sum()}/{targets.size}")
     print(f"Feature range: {features.min()} to {features.max()}")
     print(f"Target range: {targets.min()} to {targets.max()}")
-    # Create static adjacency matrix - this is the key change
-    adj_matrix = processor.create_adjacency_on_demand(threshold=10)
+    
     # Check for minimum viable dataset size
     if processor.num_nodes < 1:
         print("ERROR: No valid pixels found in dataset. Please check your data.")
@@ -269,8 +258,7 @@ def main():
         val_ds = create_tf_dataset(
             val_feat, val_targ,
             seq_len=args.seq_len,
-            batch_size=global_batch_size,
-            training=False  # Validation mode
+            batch_size=global_batch_size
         )
         
         # Debug dataset to verify shapes
@@ -296,7 +284,7 @@ def main():
     
     # Model configuration
     with strategy.scope():
-        model = EnhancedMSTSN(num_nodes=processor.num_nodes, adj_matrix=adj_matrix)
+        model = EnhancedMSTSN(num_nodes=processor.num_nodes)
         
         # Create a small dummy input with the correct dimensions for testing
         print("Creating dummy input for model verification...")
@@ -372,7 +360,7 @@ def main():
     try:
         print("\nStarting model training...")
         history = model.fit(
-            train_ds,  
+            train_ds.repeat(),  # Important: repeat dataset for TPU training
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
             validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
