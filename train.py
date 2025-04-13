@@ -37,40 +37,22 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
 class DroughtMetrics(tf.keras.metrics.Metric):
     def __init__(self, name='drought_metrics', **kwargs):
         super().__init__(name=name, **kwargs)
+        # Create separate metric objects to track results
         self.drought_rmse_metric = tf.keras.metrics.Mean(name='drought_rmse')
         self.false_alarm_metric = tf.keras.metrics.Mean(name='false_alarm')
         self.detection_rate_metric = tf.keras.metrics.Mean(name='detection_rate')
 
     @tf.function(experimental_relax_shapes=True)
-    def _update_drought_metrics(self, y_true, y_pred, drought_mask, total_drought):
-        # Drought RMSE (errors only for drought pixels)
-        squared_errors = tf.square(y_true - y_pred) * drought_mask
-        sum_squared_errors = tf.reduce_sum(squared_errors)
-        batch_drought_rmse = tf.sqrt(sum_squared_errors / total_drought)
-        self.drought_rmse_metric.update_state(batch_drought_rmse)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Handle NaNs if present
+        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+        y_true = tf.boolean_mask(y_true, valid_mask)
+        y_pred = tf.boolean_mask(y_pred, valid_mask)
         
-        # Detection rate (correctly predicted droughts / actual droughts)
-        correct_detections = tf.reduce_sum(
-            tf.cast(tf.logical_and(y_pred < -0.5, y_true < -0.5), tf.float32)
-        )
-        batch_detection_rate = correct_detections / total_drought
-        self.detection_rate_metric.update_state(batch_detection_rate)
-        # Return dummy tensor to match the shape of the other branch
-        return tf.constant(0.0)
-    
-    @tf.function(experimental_relax_shapes=True)
-    def _update_false_alarm(self, y_true, y_pred, safe_mask, total_safe):
-        # False alarm rate (wrongly predicted droughts / non-drought pixels)
-        false_alarms = tf.reduce_sum(
-            tf.cast(tf.logical_and(y_pred < -0.5, y_true >= -0.5), tf.float32) * safe_mask
-        )
-        batch_false_alarm = false_alarms / total_safe
-        self.false_alarm_metric.update_state(batch_false_alarm)
-        # Return dummy tensor to match the shape of the other branch
-        return tf.constant(0.0)
-
-    @tf.function(experimental_relax_shapes=True)
-    def _calculate_metrics(self, y_true, y_pred):
+        # Skip calculation if no valid data
+        if tf.equal(tf.size(y_true), 0):
+            return
+        
         # Drought mask (SPI < -0.5 indicates drought conditions)
         drought_mask = tf.cast(y_true < -0.5, tf.float32)
         safe_mask = 1.0 - drought_mask
@@ -79,68 +61,29 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         total_drought = tf.reduce_sum(drought_mask)
         total_safe = tf.reduce_sum(safe_mask)
         
-        # Update drought RMSE using tf.cond
-        # Ensure both branches return same type
-        _ = tf.cond(
-            tf.greater(total_drought, 0),
-            lambda: self._update_drought_metrics(y_true, y_pred, drought_mask, total_drought),
-            lambda: tf.constant(0.0)  # Both branches now return a scalar
-        )
+        # Update drought RMSE - if there are drought pixels
+        if tf.greater(total_drought, 0):
+            # Drought RMSE (errors only for drought pixels)
+            squared_errors = tf.square(y_true - y_pred) * drought_mask
+            sum_squared_errors = tf.reduce_sum(squared_errors)
+            batch_drought_rmse = tf.sqrt(sum_squared_errors / total_drought)
+            self.drought_rmse_metric.update_state(batch_drought_rmse)
+            
+            # Detection rate (correctly predicted droughts / actual droughts)
+            correct_detections = tf.reduce_sum(
+                tf.cast(tf.logical_and(y_pred < -0.5, y_true < -0.5), tf.float32)
+            )
+            batch_detection_rate = correct_detections / total_drought
+            self.detection_rate_metric.update_state(batch_detection_rate)
         
-        # Update false alarm using tf.cond
-        # Ensure both branches return same type
-        _ = tf.cond(
-            tf.greater(total_safe, 0),
-            lambda: self._update_false_alarm(y_true, y_pred, safe_mask, total_safe),
-            lambda: tf.constant(0.0)  # Both branches now return a scalar
-        )
-        
-        return tf.constant(0.0)  # Return value needed for tf.cond
-
-    @tf.function(experimental_relax_shapes=True)
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Create mask for valid values (not NaN)
-        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-        y_true = tf.boolean_mask(y_true, valid_mask)
-        y_pred = tf.boolean_mask(y_pred, valid_mask)
-        
-        # Use tf.cond instead of direct if check
-        # Make sure to use the result to avoid mismatched branches
-        _ = tf.cond(
-            tf.equal(tf.size(y_true), 0),
-            lambda: tf.constant(0.0),  # Return dummy value when not calculating
-            lambda: self._calculate_metrics(y_true, y_pred)
-        )
-        
-        return None
-
-    def result(self):
-        return {
-            'drought_rmse': self.drought_rmse_metric.result(),
-            'false_alarm': self.false_alarm_metric.result(),
-            'detection_rate': self.detection_rate_metric.result()
-        }
-
-    def reset_state(self):
-        self.drought_rmse_metric.reset_state()
-        self.false_alarm_metric.reset_state()
-        self.detection_rate_metric.reset_state()
-
-    @tf.function(experimental_relax_shapes=True)
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Create mask for valid values (not NaN)
-        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-        y_true = tf.boolean_mask(y_true, valid_mask)
-        y_pred = tf.boolean_mask(y_pred, valid_mask)
-        
-        # Use tf.cond instead of direct if check
-        tf.cond(
-            tf.equal(tf.size(y_true), 0),
-            lambda: tf.constant(0.0),  # Return dummy value when not calculating
-            lambda: self._calculate_metrics(y_true, y_pred)
-        )
-        
-        return None
+        # Update false alarm rate - if there are non-drought pixels
+        if tf.greater(total_safe, 0):
+            # False alarm rate (wrongly predicted droughts / non-drought pixels)
+            false_alarms = tf.reduce_sum(
+                tf.cast(tf.logical_and(y_pred < -0.5, y_true >= -0.5), tf.float32) * safe_mask
+            )
+            batch_false_alarm = false_alarms / total_safe
+            self.false_alarm_metric.update_state(batch_false_alarm)
 
     def result(self):
         return {
@@ -157,50 +100,43 @@ class DroughtMetrics(tf.keras.metrics.Metric):
 class R2Score(tf.keras.metrics.Metric):
     def __init__(self, name='r2_score', **kwargs):
         super().__init__(name=name, **kwargs)
+        # Create state variables
         self.sum_squared_residuals = self.add_weight(
             name='sum_squared_residuals', initializer='zeros')
         self.sum_squared_total = self.add_weight(
             name='sum_squared_total', initializer='zeros')
     
     @tf.function(experimental_relax_shapes=True)
-    def _calculate_r2(self, y_true, y_pred):
-        # Calculate mean of y_true
-        y_mean = tf.reduce_mean(y_true)
-        
-        # Sum of squared residuals (predicted vs actual)
-        squared_residuals = tf.reduce_sum(tf.square(y_true - y_pred))
-        self.sum_squared_residuals.assign_add(squared_residuals)
-        
-        # Sum of squared total (actual vs mean)
-        squared_total = tf.reduce_sum(tf.square(y_true - y_mean))
-        self.sum_squared_total.assign_add(squared_total)
-        
-        return tf.constant(0.0)  # Return value needed for tf.cond
-    
-    @tf.function(experimental_relax_shapes=True)
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Handle NaNs if present
         valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-        y_true = tf.boolean_mask(y_true, valid_mask)
-        y_pred = tf.boolean_mask(y_pred, valid_mask)
+        y_true_valid = tf.boolean_mask(y_true, valid_mask)
+        y_pred_valid = tf.boolean_mask(y_pred, valid_mask)
         
-        # Use tf.cond instead of if
-        tf.cond(
-            tf.equal(tf.size(y_true), 0),
-            lambda: tf.constant(0.0),  # Return dummy value when not calculating
-            lambda: self._calculate_r2(y_true, y_pred)
-        )
+        # Skip calculation if no valid data
+        if tf.equal(tf.size(y_true_valid), 0):
+            return
         
-        return None
+        # Calculate mean of y_true
+        y_mean = tf.reduce_mean(y_true_valid)
+        
+        # Sum of squared residuals (predicted vs actual)
+        squared_residuals = tf.reduce_sum(tf.square(y_true_valid - y_pred_valid))
+        
+        # Sum of squared total (actual vs mean)
+        squared_total = tf.reduce_sum(tf.square(y_true_valid - y_mean))
+        
+        # Update state variables
+        self.sum_squared_residuals.assign_add(squared_residuals)
+        self.sum_squared_total.assign_add(squared_total)
         
     def result(self):
-        # R² = 1 - (sum of squared residuals / sum of squared total)
-        # Handle edge case where denominator is 0
-        return tf.cond(
-            tf.equal(self.sum_squared_total, 0.0),
-            lambda: tf.constant(0.0),
-            lambda: 1.0 - (self.sum_squared_residuals / self.sum_squared_total)
-        )
+        # Avoid division by zero
+        denominator = tf.maximum(self.sum_squared_total, 1e-10)
+        r2 = 1.0 - (self.sum_squared_residuals / denominator)
+        
+        # Clip to avoid unreasonable values if sum_squared_total is very small
+        return tf.clip_by_value(r2, -1.0, 1.0)
             
     def reset_state(self):
         self.sum_squared_residuals.assign(0.0)
