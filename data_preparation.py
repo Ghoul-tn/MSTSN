@@ -74,10 +74,6 @@ class GambiaDataProcessor:
                             features[t, :, 1] = features[t-1, :, 1]  # Use previous time step
                         else:
                             features[t, :, 1] = 0.0  # Use zeros for first time step if missing
-                                else:
-                                    # Simply extract valid pixels if the masks are the same
-                                    for t in range(287):
-                                        features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
         else:
             # No NaNs in soil data, process normally
             for t in range(287):
