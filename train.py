@@ -247,8 +247,8 @@ def main():
     warmup_steps = min(1000, steps_per_epoch * 5)
     lr_schedule = WarmupCosineDecay(
         initial_lr=args.lr, 
-        warmup_steps=1000,
-        decay_steps=args.epochs * steps_per_epoch
+        warmup_steps=warmup_steps,
+        decay_steps=100000
     )
     
     # Model configuration
@@ -282,7 +282,6 @@ def main():
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
             global_clipnorm=0.5,  # Tighter gradient clipping
-            # clipvalue=0.3,
             epsilon=1e-7  # Numerical stability
         )        
         if args.mixed_precision:
