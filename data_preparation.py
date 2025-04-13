@@ -69,12 +69,15 @@ class GambiaDataProcessor:
                         # Apply interpolation
                         features[t, :, 1] = valid_values[idx]
                     else:
-                        # Use zeros for completely missing time steps
-                        features[t, :, 1] = 0.0
-            else:
-                # Simply extract valid pixels if the masks are the same
-                for t in range(287):
-                    features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
+                        # For completely missing time steps, use previous time step if available
+                        if t > 0:
+                            features[t, :, 1] = features[t-1, :, 1]  # Use previous time step
+                        else:
+                            features[t, :, 1] = 0.0  # Use zeros for first time step if missing
+                                else:
+                                    # Simply extract valid pixels if the masks are the same
+                                    for t in range(287):
+                                        features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
         else:
             # No NaNs in soil data, process normally
             for t in range(287):
@@ -139,8 +142,8 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
                 yield x_seq, y_target
 
     output_signature = (
-        tf.TensorSpec(shape=(seq_len, None, 3), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.float32)
+        tf.TensorSpec(shape=(seq_len, features.shape[1], 3), dtype=tf.float32),
+        tf.TensorSpec(shape=(features.shape[1],), dtype=tf.float32)
     )
 
     dataset = tf.data.Dataset.from_generator(
