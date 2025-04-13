@@ -18,7 +18,7 @@ def get_metrics():
 # Simplified loss function
 def drought_loss(y_true, y_pred):
     mask = tf.math.logical_not(tf.math.is_nan(y_true))
-    return tf.keras.losses.mean_squared_error(
+    return tf.keras.losses.MeanSquaredError(
         tf.boolean_mask(y_true, mask),
         tf.boolean_mask(y_pred, mask)
     )
