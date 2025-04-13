@@ -62,14 +62,12 @@ class GraphAttention(layers.Layer):
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, output_dim, adj_matrix):
         super().__init__()
-        # Convert sparse matrix to dense if needed
-        if scipy.sparse.issparse(adj_matrix):
-            adj_matrix = adj_matrix.toarray()
-            
-        # Normalize adjacency matrix
+        # Initialize projection layer for residual connection
+        self.projection = layers.Dense(output_dim)  # Add this line
+        
+        # Rest of existing code remains the same
         adj_matrix = self.normalize_adjacency(adj_matrix)
         self.adj_matrix = tf.constant(adj_matrix, dtype=tf.float32)
-        
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
         self.dropout = layers.Dropout(0.2)
@@ -88,10 +86,15 @@ class SpatialProcessor(layers.Layer):
         return adj_matrix / (degree + 1e-6)
 
     def call(self, inputs, training=False):
+        # Project inputs to match GAT output dimension
+        projected_inputs = self.projection(inputs)  # Add this line
+        
         x = self.gat1(inputs, self.adj_matrix, training=training)
         x = self.dropout(tf.nn.relu(x), training=training)
         x = self.gat2(x, self.adj_matrix, training=training)
-        return self.layer_norm(x + inputs)
+        
+        # Add projected inputs instead of original inputs
+        return self.layer_norm(x + projected_inputs)  # Modified this line
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.2):  # Increased dropout
