@@ -69,11 +69,12 @@ class GambiaDataProcessor:
                         # Apply interpolation
                         features[t, :, 1] = valid_values[idx]
                     else:
-                        # For completely missing time steps, use previous time step if available
-                        if t > 0:
-                            features[t, :, 1] = features[t-1, :, 1]  # Use previous time step
-                        else:
-                            features[t, :, 1] = 0.0  # Use zeros for first time step if missing
+                        # Use zeros for completely missing time steps
+                        features[t, :, 1] = 0.0
+            else:
+                # Simply extract valid pixels if the masks are the same
+                for t in range(287):
+                    features[t, :, 1] = np.nan_to_num(soil[t, y_idx, x_idx], nan=0.0)
         else:
             # No NaNs in soil data, process normally
             for t in range(287):
@@ -106,54 +107,44 @@ class GambiaDataProcessor:
         return scipy.sparse.csr_matrix(adj_matrix)
 
 def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False):
-    """Creates a TensorFlow dataset using tf.data operations instead of generators"""
+    """Creates TensorFlow dataset with TPU-optimized pipeline"""
     
-    # Pre-generate all possible windows (this is memory-intensive but more reliable)
-    max_time = features.shape[0] - seq_len
-    
-    # Create indices array and convert to tensors
-    indices = np.arange(max_time)
-    indices_tensor = tf.convert_to_tensor(indices, dtype=tf.int32)
-    
-    # Create base dataset from indices
-    ds = tf.data.Dataset.from_tensor_slices(indices_tensor)
-    
-    # Convert features and targets to tensors once
-    features_tensor = tf.convert_to_tensor(features, dtype=tf.float32)
-    targets_tensor = tf.convert_to_tensor(targets, dtype=tf.float32)
-    
-    # Map function to extract windows
-    def extract_window(idx):
-        x = features_tensor[idx:idx+seq_len]
-        y = targets_tensor[idx+seq_len-1]
-        
-        # Data augmentation for training
-        if training:
-            # Create random mask (same shape as x)
-            mask = tf.cast(tf.random.uniform(tf.shape(x)) < 0.1, tf.float32)
-            x = x * (1.0 - mask)  # Apply mask (set masked values to 0)
-        
-        return x, y
-    
-    # Apply the mapping function
-    ds = ds.map(extract_window, num_parallel_calls=tf.data.AUTOTUNE)
-    
-    # Shuffle, batch, and optimize for TPU
-    if training:
-        # Large buffer for better shuffling
-        ds = ds.shuffle(buffer_size=min(10000, max_time))
-        # Make it truly infinite
-        ds = ds.repeat()
-    
-    ds = ds.batch(batch_size, drop_remainder=True)
-    
-    # Validation dataset should also be repeated for TPU
-    if not training:
-        ds = ds.repeat()
-        
-    # Optimize with prefetch
-    return ds.prefetch(tf.data.AUTOTUNE)
-    
+    def generator():
+        max_time = features.shape[0] - seq_len
+        for idx in range(max_time):
+            start_idx = max(0, idx)
+            end_idx = start_idx + seq_len
+            x_seq = features[start_idx:end_idx]
+            y_target = targets[end_idx-1]  # Predict last step in sequence
+
+            # Pad if sequence is too short
+            if len(x_seq) < seq_len:
+                padding = np.zeros((seq_len - len(x_seq), *x_seq.shape[1:]), dtype=np.float32)
+                x_seq = np.concatenate([padding, x_seq])
+
+            # Apply random masking augmentation
+            if training:
+                mask = np.random.rand(*x_seq.shape) < 0.1
+                x_seq[mask] = 0
+
+            yield x_seq, y_target
+
+    output_signature = (
+        tf.TensorSpec(shape=(seq_len, None, 3), dtype=tf.float32),  # [seq_len, nodes, features]
+        tf.TensorSpec(shape=(None,), dtype=tf.float32)              # [nodes]
+    )
+
+    dataset = tf.data.Dataset.from_generator(
+        generator,
+        output_signature=output_signature
+    )
+
+    # TPU-optimized pipeline
+    return dataset \
+        .batch(batch_size, drop_remainder=True) \
+        .prefetch(tf.data.AUTOTUNE) \
+        .cache()
+
 def train_val_split(features, targets, train_ratio=0.8):
     """Temporal split of dataset"""
     total_samples = features.shape[0] - 12  # seq_len=12
