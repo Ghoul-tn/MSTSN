@@ -45,42 +45,20 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         self.false_alarm_metric = tf.keras.metrics.Mean(name='false_alarm')
         self.detection_rate_metric = tf.keras.metrics.Mean(name='detection_rate')
 
-    @tf.function(experimental_relax_shapes=True)
+    @tf.function
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Replace NaNs with zeros to ensure operations work
+        # Replace NaNs with zeros
         y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
         y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
         
-        # Proceed with calculations - no need for boolean mask after NaN replacement
-        self._update_state_impl(y_true, y_pred)
-        return tf.constant(0.0)
-    
-    def _update_state_impl(self, y_true, y_pred):
         # Drought mask (SPI < -0.5 indicates drought conditions)
         drought_mask = tf.cast(y_true < -0.5, tf.float32)
         safe_mask = 1.0 - drought_mask
         
         # Total drought and non-drought pixels for calculations
-        total_drought = tf.reduce_sum(drought_mask)
-        total_safe = tf.reduce_sum(safe_mask)
+        total_drought = tf.reduce_sum(drought_mask) + 1e-10  # Add small epsilon to avoid div by zero
+        total_safe = tf.reduce_sum(safe_mask) + 1e-10  # Add small epsilon to avoid div by zero
         
-        # Update drought RMSE - if there are drought pixels
-        tf.cond(
-            tf.greater(total_drought, 0),
-            lambda: self._update_drought_metrics(y_true, y_pred, drought_mask, total_drought),
-            lambda: tf.constant(0.0)  # Return a constant value
-        )
-        
-        # Update false alarm rate - if there are non-drought pixels
-        tf.cond(
-            tf.greater(total_safe, 0),
-            lambda: self._update_false_alarm(y_true, y_pred, safe_mask, total_safe),
-            lambda: tf.constant(0.0)  # Return a constant value
-        )
-        
-        return tf.constant(0.0)  # Return a constant value
-    
-    def _update_drought_metrics(self, y_true, y_pred, drought_mask, total_drought):
         # Drought RMSE (errors only for drought pixels)
         squared_errors = tf.square(y_true - y_pred) * drought_mask
         sum_squared_errors = tf.reduce_sum(squared_errors)
@@ -93,16 +71,13 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         )
         batch_detection_rate = correct_detections / total_drought
         self.detection_rate_metric.update_state(batch_detection_rate)
-        return tf.constant(0.0)  # Return a constant value
-    
-    def _update_false_alarm(self, y_true, y_pred, safe_mask, total_safe):
+        
         # False alarm rate (wrongly predicted droughts / non-drought pixels)
         false_alarms = tf.reduce_sum(
             tf.cast(tf.logical_and(y_pred < -0.5, y_true >= -0.5), tf.float32) * safe_mask
         )
         batch_false_alarm = false_alarms / total_safe
         self.false_alarm_metric.update_state(batch_false_alarm)
-        return tf.constant(0.0)  # Return a constant value
 
     def result(self):
         return {
@@ -125,44 +100,31 @@ class R2Score(tf.keras.metrics.Metric):
         self.sum_squared_total = self.add_weight(
             name='sum_squared_total', initializer='zeros')
     
-    @tf.function(experimental_relax_shapes=True)
+    @tf.function
     def update_state(self, y_true, y_pred, sample_weight=None):
-        # Handle NaNs if present
-        valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-        y_true_valid = tf.boolean_mask(y_true, valid_mask)
-        y_pred_valid = tf.boolean_mask(y_pred, valid_mask)
+        # Replace NaNs with zeros to avoid any issues
+        y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
+        y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
         
-        # Use tf.cond instead of if statement for TPU compatibility
-        tf.cond(
-            tf.equal(tf.size(y_true_valid), 0),
-            lambda: tf.constant(0.0),  # Return a constant instead of no_op
-            lambda: self._update_state_impl(y_true_valid, y_pred_valid)
-        )
-        
-        # Always return something from update_state when using tf.function
-        return tf.constant(0.0)
-    
-    def _update_state_impl(self, y_true_valid, y_pred_valid):
         # Calculate mean of y_true
-        y_mean = tf.reduce_mean(y_true_valid)
+        y_mean = tf.reduce_mean(y_true)
         
         # Sum of squared residuals (predicted vs actual)
-        squared_residuals = tf.reduce_sum(tf.square(y_true_valid - y_pred_valid))
+        squared_residuals = tf.reduce_sum(tf.square(y_true - y_pred))
         
         # Sum of squared total (actual vs mean)
-        squared_total = tf.reduce_sum(tf.square(y_true_valid - y_mean))
+        squared_total = tf.reduce_sum(tf.square(y_true - y_mean))
         
-        # Update state variables
+        # Update state variables directly - no conditional logic
         self.sum_squared_residuals.assign_add(squared_residuals)
         self.sum_squared_total.assign_add(squared_total)
-        return tf.constant(0.0)  # Return a constant value
         
     def result(self):
         # Avoid division by zero
         denominator = tf.maximum(self.sum_squared_total, 1e-10)
         r2 = 1.0 - (self.sum_squared_residuals / denominator)
         
-        # Clip to avoid unreasonable values if sum_squared_total is very small
+        # Clip to avoid unreasonable values
         return tf.clip_by_value(r2, -1.0, 1.0)
             
     def reset_state(self):
