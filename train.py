@@ -364,7 +364,7 @@ def main():
             train_ds,  # Important: repeat dataset for TPU training
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
-            validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
+            validation_data=val_ds,  # Important: repeat validation dataset too
             validation_steps=validation_steps,
             callbacks=callbacks
         )
