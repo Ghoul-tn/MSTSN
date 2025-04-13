@@ -52,14 +52,14 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         # Use tf.cond instead of if statement for TPU compatibility
         tf.cond(
             tf.equal(tf.size(y_true_valid), 0),
-            lambda: tf.no_op(),  # No-op if no valid data
-            lambda: self._update_metrics(y_true_valid, y_pred_valid)
+            lambda: tf.constant(0.0),  # Return a constant instead of no_op
+            lambda: self._update_state_impl(y_true_valid, y_pred_valid)
         )
         
         # Always return something from update_state when using tf.function
-        return None
+        return tf.constant(0.0)
     
-    def _update_metrics(self, y_true, y_pred):
+    def _update_state_impl(self, y_true, y_pred):
         # Drought mask (SPI < -0.5 indicates drought conditions)
         drought_mask = tf.cast(y_true < -0.5, tf.float32)
         safe_mask = 1.0 - drought_mask
@@ -72,17 +72,17 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         tf.cond(
             tf.greater(total_drought, 0),
             lambda: self._update_drought_metrics(y_true, y_pred, drought_mask, total_drought),
-            lambda: tf.no_op()
+            lambda: tf.constant(0.0)  # Return a constant value
         )
         
         # Update false alarm rate - if there are non-drought pixels
         tf.cond(
             tf.greater(total_safe, 0),
             lambda: self._update_false_alarm(y_true, y_pred, safe_mask, total_safe),
-            lambda: tf.no_op()
+            lambda: tf.constant(0.0)  # Return a constant value
         )
         
-        return None
+        return tf.constant(0.0)  # Return a constant value
     
     def _update_drought_metrics(self, y_true, y_pred, drought_mask, total_drought):
         # Drought RMSE (errors only for drought pixels)
@@ -97,7 +97,7 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         )
         batch_detection_rate = correct_detections / total_drought
         self.detection_rate_metric.update_state(batch_detection_rate)
-        return None
+        return tf.constant(0.0)  # Return a constant value
     
     def _update_false_alarm(self, y_true, y_pred, safe_mask, total_safe):
         # False alarm rate (wrongly predicted droughts / non-drought pixels)
@@ -106,7 +106,7 @@ class DroughtMetrics(tf.keras.metrics.Metric):
         )
         batch_false_alarm = false_alarms / total_safe
         self.false_alarm_metric.update_state(batch_false_alarm)
-        return None
+        return tf.constant(0.0)  # Return a constant value
 
     def result(self):
         return {
@@ -144,7 +144,7 @@ class R2Score(tf.keras.metrics.Metric):
         )
         
         # Always return something from update_state when using tf.function
-        return None
+        return tf.constant(0.0)
     
     def _update_state_impl(self, y_true_valid, y_pred_valid):
         # Calculate mean of y_true
