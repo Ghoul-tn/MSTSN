@@ -114,6 +114,7 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
         
         # For training, use infinite shuffling to prevent StopIteration
         if training:
+            # Better shuffling approach
             while True:
                 np.random.shuffle(indices)
                 for idx in indices:
@@ -124,9 +125,13 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
                     
                     # Apply random masking augmentation if training
                     mask = np.random.rand(*x_seq.shape) < 0.1
-                    x_seq = x_seq.copy()  # Create a copy to avoid modifying original
+                    x_seq = x_seq.copy()
                     x_seq[mask] = 0
                     
+                    # Check for NaN values before yielding
+                    if np.isnan(x_seq).any() or np.isnan(y_target).any():
+                        continue  # Skip this batch if NaNs are present
+                        
                     yield x_seq, y_target
         else:
             # For validation/testing, go through once
@@ -135,7 +140,10 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
                 end_idx = start_idx + seq_len
                 x_seq = features[start_idx:end_idx]
                 y_target = targets[end_idx-1]
-                yield x_seq, y_target
+                
+                # Check for NaN values
+                if not np.isnan(x_seq).any() and not np.isnan(y_target).any():
+                    yield x_seq, y_target
 
     output_signature = (
         tf.TensorSpec(shape=(seq_len, features.shape[1], 3), dtype=tf.float32),
@@ -147,8 +155,13 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
         output_signature=output_signature
     )
 
-    # TPU-optimized pipeline - cache after batch for efficiency
-    return dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    # TPU-optimized pipeline with prefetch and cache
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    if training:
+        # Explicitly make dataset infinite with repeat() for TPU
+        dataset = dataset.repeat()
+    
+    return dataset.prefetch(tf.data.AUTOTUNE)
     
 def train_val_split(features, targets, train_ratio=0.8):
     """Temporal split of dataset"""
