@@ -248,7 +248,7 @@ def main():
     lr_schedule = WarmupCosineDecay(
         initial_lr=args.lr, 
         warmup_steps=warmup_steps,
-        decay_steps=100000
+        decay_steps=args.epochs * steps_per_epoch
     )
     
     # Model configuration
