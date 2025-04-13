@@ -7,7 +7,57 @@ import tensorflow as tf
 from data_preparation import GambiaDataProcessor, create_tf_dataset, train_val_split
 from mstsn import EnhancedMSTSN
 
-def _calculate_drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
+
+class DroughtMetrics(tf.keras.metrics.Metric):
+    def __init__(self, name='drought_metrics', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.drought_rmse = self.add_weight(name='drmse', initializer='zeros')
+        self.false_alarm = self.add_weight(name='fa', initializer='zeros')
+        self.detection_rate = self.add_weight(name='dr', initializer='zeros')
+        self.count = self.add_weight(name='count', initializer='zeros')
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        drought_mask = tf.cast(y_true < -0.5, tf.float32)
+        safe_mask = 1.0 - drought_mask
+        
+        # Drought RMSE
+        squared_errors = tf.square(y_true - y_pred) * drought_mask
+        sum_squared_errors = tf.reduce_sum(squared_errors)
+        total_drought = tf.maximum(tf.reduce_sum(drought_mask), 1e-7)
+        self.drought_rmse.assign_add(tf.sqrt(sum_squared_errors / total_drought))
+        
+        # False alarm rate
+        false_alarms = tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32) * safe_mask
+        self.false_alarm.assign_add(tf.reduce_sum(false_alarms) / tf.maximum(tf.reduce_sum(safe_mask), 1e-7))
+        
+        # Detection rate
+        correct_detections = tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32) * drought_mask
+        self.detection_rate.assign_add(tf.reduce_sum(correct_detections) / tf.maximum(total_drought, 1e-7))
+        
+        self.count.assign_add(1.0)
+
+    def result(self):
+        return {
+            'drought_rmse': self.drought_rmse / self.count,
+            'false_alarm': self.false_alarm / self.count,
+            'detection_rate': self.detection_rate / self.count
+        }
+
+    def reset_state(self):
+        for var in self.variables:
+            var.assign(0.0)
+
+@tf.function
+def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
+    # Check for NaNs
+    mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+    y_true = tf.boolean_mask(y_true, mask)
+    y_pred = tf.boolean_mask(y_pred, mask)
+    
+    # If no valid values remain, return small constant loss
+    if tf.equal(tf.size(y_true), 0):
+        return tf.constant(0.1, dtype=tf.float32)
+    
     # Original loss calculation with valid values only
     base_loss = tf.keras.losses.Huber(delta=0.5)(y_true, y_pred)
     
@@ -19,118 +69,6 @@ def _calculate_drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     # Check for NaN in result and replace with small constant
     result = base_loss + drought_err
     return tf.where(tf.math.is_nan(result), tf.constant(0.1, dtype=tf.float32), result)
-
-@tf.function
-def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
-    # Check for NaNs and replace them with valid values to prevent propagation
-    y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
-    y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
-    
-    # Create a valid mask (not needed after NaN replacement, but kept for safety)
-    mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
-    y_true = tf.boolean_mask(y_true, mask)
-    y_pred = tf.boolean_mask(y_pred, mask)
-    
-    return tf.cond(
-        tf.equal(tf.size(y_true), 0),
-        lambda: tf.constant(0.1, dtype=tf.float32),
-        lambda: _calculate_drought_loss(y_true, y_pred, alpha, gamma)
-    )
-
-class DroughtMetrics(tf.keras.metrics.Metric):
-    def __init__(self, name='drought_metrics', **kwargs):
-        super().__init__(name=name, **kwargs)
-        # Create separate metric objects to track results
-        self.drought_rmse_metric = tf.keras.metrics.Mean(name='drought_rmse')
-        self.false_alarm_metric = tf.keras.metrics.Mean(name='false_alarm')
-        self.detection_rate_metric = tf.keras.metrics.Mean(name='detection_rate')
-
-    @tf.function
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Replace NaNs with zeros
-        y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
-        y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
-        
-        # Drought mask (SPI < -0.5 indicates drought conditions)
-        drought_mask = tf.cast(y_true < -0.5, tf.float32)
-        safe_mask = 1.0 - drought_mask
-        
-        # Total drought and non-drought pixels for calculations
-        total_drought = tf.reduce_sum(drought_mask) + 1e-10  # Add small epsilon to avoid div by zero
-        total_safe = tf.reduce_sum(safe_mask) + 1e-10  # Add small epsilon to avoid div by zero
-        
-        # Drought RMSE (errors only for drought pixels)
-        squared_errors = tf.square(y_true - y_pred) * drought_mask
-        sum_squared_errors = tf.reduce_sum(squared_errors)
-        batch_drought_rmse = tf.sqrt(sum_squared_errors / total_drought)
-        self.drought_rmse_metric.update_state(batch_drought_rmse)
-        
-        # Detection rate (correctly predicted droughts / actual droughts)
-        correct_detections = tf.reduce_sum(
-            tf.cast(tf.logical_and(y_pred < -0.5, y_true < -0.5), tf.float32)
-        )
-        batch_detection_rate = correct_detections / total_drought
-        self.detection_rate_metric.update_state(batch_detection_rate)
-        
-        # False alarm rate (wrongly predicted droughts / non-drought pixels)
-        false_alarms = tf.reduce_sum(
-            tf.cast(tf.logical_and(y_pred < -0.5, y_true >= -0.5), tf.float32) * safe_mask
-        )
-        batch_false_alarm = false_alarms / total_safe
-        self.false_alarm_metric.update_state(batch_false_alarm)
-
-    def result(self):
-        return {
-            'drought_rmse': self.drought_rmse_metric.result(),
-            'false_alarm': self.false_alarm_metric.result(),
-            'detection_rate': self.detection_rate_metric.result()
-        }
-
-    def reset_state(self):
-        self.drought_rmse_metric.reset_state()
-        self.false_alarm_metric.reset_state()
-        self.detection_rate_metric.reset_state()
-
-class R2Score(tf.keras.metrics.Metric):
-    def __init__(self, name='r2_score', **kwargs):
-        super().__init__(name=name, **kwargs)
-        # Create state variables
-        self.sum_squared_residuals = self.add_weight(
-            name='sum_squared_residuals', initializer='zeros')
-        self.sum_squared_total = self.add_weight(
-            name='sum_squared_total', initializer='zeros')
-    
-    @tf.function
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        # Replace NaNs with zeros to avoid any issues
-        y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
-        y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
-        
-        # Calculate mean of y_true
-        y_mean = tf.reduce_mean(y_true)
-        
-        # Sum of squared residuals (predicted vs actual)
-        squared_residuals = tf.reduce_sum(tf.square(y_true - y_pred))
-        
-        # Sum of squared total (actual vs mean)
-        squared_total = tf.reduce_sum(tf.square(y_true - y_mean))
-        
-        # Update state variables directly - no conditional logic
-        self.sum_squared_residuals.assign_add(squared_residuals)
-        self.sum_squared_total.assign_add(squared_total)
-        
-    def result(self):
-        # Avoid division by zero
-        denominator = tf.maximum(self.sum_squared_total, 1e-10)
-        r2 = 1.0 - (self.sum_squared_residuals / denominator)
-        
-        # Clip to avoid unreasonable values
-        return tf.clip_by_value(r2, -1.0, 1.0)
-            
-    def reset_state(self):
-        self.sum_squared_residuals.assign(0.0)
-        self.sum_squared_total.assign(0.0)
-
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
     
@@ -205,6 +143,20 @@ def debug_dataset(ds, steps=2):
             break
     print("=== End Debug ===\n")
 
+
+# # Learning rate scheduler for transformer training
+# def get_lr_schedule(initial_lr, warmup_steps=1000):
+#     def lr_schedule(step):
+#         # Linear warmup followed by cosine decay
+#         if step < warmup_steps:
+#             return initial_lr * (step / warmup_steps)
+#         else:
+#             decay_steps = 100000  # Adjust as needed
+#             step_after_warmup = step - warmup_steps
+#             cosine_decay = 0.5 * (1 + tf.cos(tf.constant(np.pi) * step_after_warmup / decay_steps))
+#             return initial_lr * cosine_decay
+    
+#     return lr_schedule
 class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, initial_lr, warmup_steps=1000, decay_steps=100000):
         super().__init__()
@@ -245,9 +197,7 @@ def configure_tpu_options():
     """Configure TF to handle unsupported ops by running them on CPU"""
     # Enable soft device placement to allow ops without TPU implementation to run on CPU
     tf.config.set_soft_device_placement(True)
-    
-    
-    print("Configured device placement for TPU compatibility")
+    print("Enabled soft device placement for TPU compatibility")
     
 def main():
     args = parse_args()
@@ -297,20 +247,19 @@ def main():
     (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
     print(f"Training data shape: {train_feat.shape}, Validation data shape: {val_feat.shape}")
     
-    # Create datasets - FIX: Don't add .repeat() here
+    # Create datasets
     with strategy.scope():
         train_ds = create_tf_dataset(
             train_feat, train_targ,
             seq_len=args.seq_len,
             batch_size=global_batch_size,
-            training=True  # The generator will handle repeating internally
+            training=True
         )
         
         val_ds = create_tf_dataset(
             val_feat, val_targ,
             seq_len=args.seq_len,
-            batch_size=global_batch_size,
-            training=False  # No infinite repeat for validation
+            batch_size=global_batch_size
         )
         
         # Debug dataset to verify shapes
@@ -318,16 +267,15 @@ def main():
     
     # Calculate steps per epoch - with proper estimation for your dataset size
     time_steps = features.shape[0] - args.seq_len
-    train_time_steps = train_feat.shape[0] - args.seq_len
-    val_time_steps = val_feat.shape[0] - args.seq_len
+    samples_per_step = processor.num_nodes  # Each time point has processor.num_nodes samples
+    total_samples = time_steps * samples_per_step  # Total number of potential samples
     
-    # Calculate steps based on actual available samples
-    steps_per_epoch = max(1, train_time_steps // global_batch_size)
-    validation_steps = max(1, val_time_steps // global_batch_size)
+    steps_per_epoch = max(1, total_samples // (global_batch_size * 100))  # Divide by 100 to make epochs faster
+    validation_steps = max(1, (total_samples // 5) // (global_batch_size * 100))  # 20% for validation
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
-    # Apply learning rate schedule with warmup
+    # Apply learning rate schedule with warmup - USING FIXED VERSION
     warmup_steps = min(1000, steps_per_epoch * 5)
     lr_schedule = WarmupCosineDecay(
         initial_lr=args.lr, 
@@ -368,8 +316,8 @@ def main():
             clipnorm=1.0  
         )
         
-        # Use smaller steps_per_execution to improve stability on TPU
-        steps_per_execution = min(9, max(1, steps_per_epoch // 10)) if using_tpu else 1
+        # Compile with reasonable steps_per_execution for TPU
+        steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
         
         model.compile(
@@ -377,9 +325,7 @@ def main():
             loss=lambda y_true,y_pred: drought_loss(y_true, y_pred, args.alpha, args.gamma),
             metrics=[
                 tf.keras.metrics.RootMeanSquaredError(name='rmse'),
-                tf.keras.metrics.MeanSquaredError(name='mse'),  # Added MSE
                 tf.keras.metrics.MeanAbsoluteError(name='mae'),
-                R2Score(name='r2'),  # Added R²
                 DroughtMetrics()
             ],
             steps_per_execution=steps_per_execution
@@ -409,25 +355,18 @@ def main():
             patience=5,
             min_lr=1e-6,
             verbose=1
-        ),
-        # Add TensorBoard if you want visualization
-        tf.keras.callbacks.TensorBoard(
-            log_dir=os.path.join(args.results_dir, 'logs'),
-            update_freq='epoch'
         )
     ]
-    
-    # Train model
+    # Train model with explicit steps
     try:
         print("\nStarting model training...")
         history = model.fit(
-            train_ds,  # NOTE: No .repeat() here since our generator will loop infinitely
+            train_ds.repeat(),  # Important: repeat dataset for TPU training
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
-            validation_data=val_ds,  # No .repeat() needed
+            validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
             validation_steps=validation_steps,
-            callbacks=callbacks,
-            verbose=1
+            callbacks=callbacks
         )
         
         # Save final model
@@ -446,10 +385,6 @@ def main():
             print(f"Best validation RMSE: {min(history.history['val_rmse']):.4f}")
         if history.history.get('val_mae'):
             print(f"Best validation MAE: {min(history.history['val_mae']):.4f}")
-        if history.history.get('val_r2'):
-            print(f"Best validation R²: {max(history.history['val_r2']):.4f}")
-        if history.history.get('val_mse'):
-            print(f"Best validation MSE: {min(history.history['val_mse']):.4f}")
         
     except Exception as e:
         print(f"Training failed with error: {e}")
