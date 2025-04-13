@@ -265,13 +265,13 @@ def main():
         # Debug dataset to verify shapes
         debug_dataset(train_ds)
     
-    # Calculate steps per epoch - with proper estimation for your dataset size
-    train_samples = train_feat.shape[0] - args.seq_len
-    steps_per_epoch = max(1, train_samples // global_batch_size)
+    # Calculate steps per epoch
+    time_steps_train = train_feat.shape[0] - args.seq_len
+    steps_per_epoch = max(1, (time_steps_train * processor.num_nodes) // global_batch_size)
     
     # Calculate validation steps
-    val_samples = val_feat.shape[0] - args.seq_len
-    validation_steps = max(1, val_samples // global_batch_size)
+    time_steps_val = val_feat.shape[0] - args.seq_len
+    validation_steps = max(1, (time_steps_val * processor.num_nodes) // global_batch_size)
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
@@ -361,7 +361,7 @@ def main():
     try:
         print("\nStarting model training...")
         history = model.fit(
-            train_ds.repeat(),  # Important: repeat dataset for TPU training
+            train_ds,  # Important: repeat dataset for TPU training
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
             validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
