@@ -105,7 +105,7 @@ class GambiaDataProcessor:
         np.fill_diagonal(adj_matrix, 0)
         return scipy.sparse.csr_matrix(adj_matrix)
 
-def create_tf_dataset_v2(features, targets, seq_len=12, batch_size=16, training=False):
+def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=False):
     """Creates a TensorFlow dataset using tf.data operations instead of generators"""
     
     # Pre-generate all possible windows (this is memory-intensive but more reliable)
