@@ -53,7 +53,8 @@ def drought_loss(y_true, y_pred, alpha=3.0, gamma=2.0):
     mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
     y_true = tf.boolean_mask(y_true, mask)
     y_pred = tf.boolean_mask(y_pred, mask)
-    
+    y_true = tf.where(tf.math.is_nan(y_true), tf.zeros_like(y_true), y_true)
+    y_pred = tf.where(tf.math.is_nan(y_pred), tf.zeros_like(y_pred), y_pred)
     # If no valid values remain, return small constant loss
     if tf.equal(tf.size(y_true), 0):
         return tf.constant(0.1, dtype=tf.float32)
@@ -361,7 +362,7 @@ def main():
     try:
         print("\nStarting model training...")
         history = model.fit(
-            train_ds.repeat(),  # Important: repeat dataset for TPU training
+            train_ds,  
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
             validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
