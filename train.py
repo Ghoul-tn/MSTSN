@@ -18,7 +18,7 @@ def get_metrics():
 # Simplified loss function
 @tf.function
 def drought_loss(y_true, y_pred):
-    # Create mask for valid entries (non-NaN in either y_true or y_pred)
+    # Create mask for valid entries (non-NaN in either tensor)
     mask = tf.math.logical_not(
         tf.math.logical_or(
             tf.math.is_nan(y_true),
@@ -26,18 +26,16 @@ def drought_loss(y_true, y_pred):
         )
     )
     
-    # Use TensorFlow operations to handle empty tensors
+    # Apply mask using TensorFlow operations only
     y_true_masked = tf.boolean_mask(y_true, mask)
     y_pred_masked = tf.boolean_mask(y_pred, mask)
     
-    # Handle empty tensors using tf.cond
-    loss = tf.cond(
-        tf.equal(tf.size(y_true_masked), 0),
-        lambda: tf.constant(0.0, dtype=tf.float32),
-        lambda: tf.keras.losses.MeanSquaredError(y_true_masked, y_pred_masked)
-    )
+    # Compute MSE loss with numerical stability
+    squared_errors = tf.square(y_true_masked - y_pred_masked)
+    sum_squared = tf.reduce_sum(squared_errors)
+    count = tf.cast(tf.size(y_true_masked), tf.float32) + tf.keras.backend.epsilon()
     
-    return loss
+    return sum_squared / count
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
     
