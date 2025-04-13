@@ -240,6 +240,7 @@ def main():
     if args.mixed_precision:
         policy = tf.keras.mixed_precision.Policy('mixed_bfloat16')
         tf.keras.mixed_precision.set_global_policy(policy)
+        tf.config.optimizer.set_jit(True)
         print('Mixed precision enabled')
     
     # Split datasets
@@ -264,30 +265,22 @@ def main():
         # Debug dataset to verify shapes
         debug_dataset(train_ds)
     
-    # Calculate steps per epoch - FIXED CALCULATION
-    # Get exact number of samples from sequence generation
-    time_steps = train_feat.shape[0] - args.seq_len
-    train_samples = time_steps  # Each time step produces one sample for every node
+    # Calculate steps per epoch - with proper estimation for your dataset size
+    time_steps = features.shape[0] - args.seq_len
+    samples_per_step = processor.num_nodes  # Each time point has processor.num_nodes samples
+    total_samples = time_steps * samples_per_step  # Total number of potential samples
     
-    # Calculate exact steps per epoch with the actual batch size
-    steps_per_epoch = train_samples // global_batch_size
-    if steps_per_epoch == 0:
-        steps_per_epoch = 1  # Ensure at least one step
-    
-    # Same calculation for validation
-    val_time_steps = val_feat.shape[0] - args.seq_len
-    validation_steps = val_time_steps // global_batch_size
-    if validation_steps == 0:
-        validation_steps = 1  # Ensure at least one step
+    steps_per_epoch = max(1, total_samples // (global_batch_size * 100))  # Divide by 100 to make epochs faster
+    validation_steps = max(1, (total_samples // 5) // (global_batch_size * 100))  # 20% for validation
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
     # Apply learning rate schedule with warmup - USING FIXED VERSION
-    warmup_steps = min(100, steps_per_epoch * 3)  # Reduced warmup for smaller dataset
+    warmup_steps = min(1000, steps_per_epoch * 5)
     lr_schedule = WarmupCosineDecay(
         initial_lr=args.lr, 
         warmup_steps=warmup_steps,
-        decay_steps=steps_per_epoch * args.epochs
+        decay_steps=100000
     )
     
     # Model configuration
@@ -323,8 +316,8 @@ def main():
             clipnorm=1.0  
         )
         
-        # Use a smaller steps_per_execution for TPU that fits within dataset size
-        steps_per_execution = min(9, max(1, steps_per_epoch // 10)) if using_tpu else 1
+        # Compile with reasonable steps_per_execution for TPU
+        steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
         
         model.compile(
@@ -364,33 +357,27 @@ def main():
             verbose=1
         )
     ]
-    
-    # Train model with explicit steps and proper error handling
+    # Train model with explicit steps
     try:
         print("\nStarting model training...")
-        # Make sure datasets are properly repeated
-        infinite_train_ds = train_ds.repeat()
-        infinite_val_ds = val_ds.repeat()
-        
         history = model.fit(
-            infinite_train_ds,
+            train_ds.repeat(),  # Important: repeat dataset for TPU training
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
-            validation_data=infinite_val_ds,
+            validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
             validation_steps=validation_steps,
             callbacks=callbacks
         )
         
         # Save final model
         try:
+            model.save(os.path.join(args.results_dir, 'final_model.h5'))
+            print(f"Model saved to {os.path.join(args.results_dir, 'final_model.h5')}")
+        except Exception as e:
+            print(f"Error saving model: {e}")
+            # Try saving weights only if full model save fails
             model.save_weights(os.path.join(args.results_dir, 'final_model_weights.h5'))
             print(f"Model weights saved to {os.path.join(args.results_dir, 'final_model_weights.h5')}")
-            # Try saving full model after weights
-            model.save(os.path.join(args.results_dir, 'final_model.h5'))
-            print(f"Full model saved to {os.path.join(args.results_dir, 'final_model.h5')}")
-        except Exception as e:
-            print(f"Error saving full model: {e}")
-            # We already saved weights above, so no need for another fallback
         
         # Print final metrics
         print("\nTraining completed. Final metrics:")
