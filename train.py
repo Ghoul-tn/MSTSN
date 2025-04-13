@@ -247,19 +247,20 @@ def main():
     (train_feat, train_targ), (val_feat, val_targ) = train_val_split(features, targets)
     print(f"Training data shape: {train_feat.shape}, Validation data shape: {val_feat.shape}")
     
-    # Create datasets
+    # Create datasets - FIX: Don't add .repeat() here
     with strategy.scope():
         train_ds = create_tf_dataset(
             train_feat, train_targ,
             seq_len=args.seq_len,
             batch_size=global_batch_size,
-            training=True
+            training=True  # The generator will handle repeating internally
         )
         
         val_ds = create_tf_dataset(
             val_feat, val_targ,
             seq_len=args.seq_len,
-            batch_size=global_batch_size
+            batch_size=global_batch_size,
+            training=False  # No infinite repeat for validation
         )
         
         # Debug dataset to verify shapes
@@ -267,15 +268,16 @@ def main():
     
     # Calculate steps per epoch - with proper estimation for your dataset size
     time_steps = features.shape[0] - args.seq_len
-    samples_per_step = processor.num_nodes  # Each time point has processor.num_nodes samples
-    total_samples = time_steps * samples_per_step  # Total number of potential samples
+    train_time_steps = train_feat.shape[0] - args.seq_len
+    val_time_steps = val_feat.shape[0] - args.seq_len
     
-    steps_per_epoch = max(1, total_samples // (global_batch_size * 100))  # Divide by 100 to make epochs faster
-    validation_steps = max(1, (total_samples // 5) // (global_batch_size * 100))  # 20% for validation
+    # Calculate steps based on actual available samples
+    steps_per_epoch = max(1, train_time_steps // global_batch_size)
+    validation_steps = max(1, val_time_steps // global_batch_size)
     
     print(f"Training with {steps_per_epoch} steps per epoch, {validation_steps} validation steps")
     
-    # Apply learning rate schedule with warmup - USING FIXED VERSION
+    # Apply learning rate schedule with warmup
     warmup_steps = min(1000, steps_per_epoch * 5)
     lr_schedule = WarmupCosineDecay(
         initial_lr=args.lr, 
@@ -285,6 +287,108 @@ def main():
     
     # Model configuration
     with strategy.scope():
+        # Add new metrics classes
+        class R2Score(tf.keras.metrics.Metric):
+            def __init__(self, name='r2_score', **kwargs):
+                super().__init__(name=name, **kwargs)
+                self.sum_squared_residuals = self.add_weight(
+                    name='sum_squared_residuals', initializer='zeros')
+                self.sum_squared_total = self.add_weight(
+                    name='sum_squared_total', initializer='zeros')
+                
+            def update_state(self, y_true, y_pred, sample_weight=None):
+                # Handle NaNs if present
+                valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+                y_true = tf.boolean_mask(y_true, valid_mask)
+                y_pred = tf.boolean_mask(y_pred, valid_mask)
+                
+                # Skip if no valid data
+                if tf.equal(tf.size(y_true), 0):
+                    return
+                    
+                # Calculate mean of y_true
+                y_mean = tf.reduce_mean(y_true)
+                
+                # Sum of squared residuals (predicted vs actual)
+                squared_residuals = tf.reduce_sum(tf.square(y_true - y_pred))
+                self.sum_squared_residuals.assign_add(squared_residuals)
+                
+                # Sum of squared total (actual vs mean)
+                squared_total = tf.reduce_sum(tf.square(y_true - y_mean))
+                self.sum_squared_total.assign_add(squared_total)
+                
+            def result(self):
+                # R² = 1 - (sum of squared residuals / sum of squared total)
+                # Handle edge case where denominator is 0
+                if tf.equal(self.sum_squared_total, 0.0):
+                    return tf.constant(0.0)
+                return 1.0 - (self.sum_squared_residuals / self.sum_squared_total)
+                
+            def reset_state(self):
+                self.sum_squared_residuals.assign(0.0)
+                self.sum_squared_total.assign(0.0)
+        
+        # Fix the DroughtMetrics class for better NaN handling
+        class DroughtMetrics(tf.keras.metrics.Metric):
+            def __init__(self, name='drought_metrics', **kwargs):
+                super().__init__(name=name, **kwargs)
+                self.drought_rmse_metric = tf.keras.metrics.Mean(name='drought_rmse')
+                self.false_alarm_metric = tf.keras.metrics.Mean(name='false_alarm')
+                self.detection_rate_metric = tf.keras.metrics.Mean(name='detection_rate')
+
+            def update_state(self, y_true, y_pred, sample_weight=None):
+                # Create mask for valid values (not NaN) - important for robustness
+                valid_mask = tf.logical_not(tf.math.is_nan(y_true) | tf.math.is_nan(y_pred))
+                y_true = tf.boolean_mask(y_true, valid_mask)
+                y_pred = tf.boolean_mask(y_pred, valid_mask)
+                
+                # Skip processing if no valid data
+                if tf.equal(tf.size(y_true), 0):
+                    return
+                    
+                # Drought mask (SPI < -0.5 indicates drought conditions)
+                drought_mask = tf.cast(y_true < -0.5, tf.float32)
+                safe_mask = 1.0 - drought_mask
+                
+                # Total drought and non-drought pixels for calculations
+                total_drought = tf.reduce_sum(drought_mask)
+                total_safe = tf.reduce_sum(safe_mask)
+                
+                # Skip calculations that would result in division by zero
+                if total_drought > 0:
+                    # Drought RMSE (errors only for drought pixels)
+                    squared_errors = tf.square(y_true - y_pred) * drought_mask
+                    sum_squared_errors = tf.reduce_sum(squared_errors)
+                    batch_drought_rmse = tf.sqrt(sum_squared_errors / total_drought)
+                    self.drought_rmse_metric.update_state(batch_drought_rmse)
+                    
+                    # Detection rate (correctly predicted droughts / actual droughts)
+                    correct_detections = tf.reduce_sum(
+                        tf.cast((y_pred < -0.5) & (y_true < -0.5), tf.float32)
+                    )
+                    batch_detection_rate = correct_detections / total_drought
+                    self.detection_rate_metric.update_state(batch_detection_rate)
+                
+                if total_safe > 0:
+                    # False alarm rate (wrongly predicted droughts / non-drought pixels)
+                    false_alarms = tf.reduce_sum(
+                        tf.cast((y_pred < -0.5) & (y_true >= -0.5), tf.float32)
+                    )
+                    batch_false_alarm = false_alarms / total_safe
+                    self.false_alarm_metric.update_state(batch_false_alarm)
+
+            def result(self):
+                return {
+                    'drought_rmse': self.drought_rmse_metric.result(),
+                    'false_alarm': self.false_alarm_metric.result(),
+                    'detection_rate': self.detection_rate_metric.result()
+                }
+
+            def reset_state(self):
+                self.drought_rmse_metric.reset_state()
+                self.false_alarm_metric.reset_state()
+                self.detection_rate_metric.reset_state()
+
         model = EnhancedMSTSN(num_nodes=processor.num_nodes, adj_matrix=adj_matrix)
         
         # Create a small dummy input with the correct dimensions for testing
@@ -316,8 +420,8 @@ def main():
             clipnorm=1.0  
         )
         
-        # Compile with reasonable steps_per_execution for TPU
-        steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
+        # Use smaller steps_per_execution to improve stability on TPU
+        steps_per_execution = min(9, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
         
         model.compile(
@@ -325,7 +429,9 @@ def main():
             loss=lambda y_true,y_pred: drought_loss(y_true, y_pred, args.alpha, args.gamma),
             metrics=[
                 tf.keras.metrics.RootMeanSquaredError(name='rmse'),
+                tf.keras.metrics.MeanSquaredError(name='mse'),  # Added MSE
                 tf.keras.metrics.MeanAbsoluteError(name='mae'),
+                R2Score(name='r2'),  # Added R²
                 DroughtMetrics()
             ],
             steps_per_execution=steps_per_execution
@@ -355,18 +461,25 @@ def main():
             patience=5,
             min_lr=1e-6,
             verbose=1
+        ),
+        # Add TensorBoard if you want visualization
+        tf.keras.callbacks.TensorBoard(
+            log_dir=os.path.join(args.results_dir, 'logs'),
+            update_freq='epoch'
         )
     ]
-    # Train model with explicit steps
+    
+    # Train model
     try:
         print("\nStarting model training...")
         history = model.fit(
-            train_ds.repeat(),  # Important: repeat dataset for TPU training
+            train_ds,  # NOTE: No .repeat() here since our generator will loop infinitely
             epochs=args.epochs,
             steps_per_epoch=steps_per_epoch,
-            validation_data=val_ds.repeat(),  # Important: repeat validation dataset too
+            validation_data=val_ds,  # No .repeat() needed
             validation_steps=validation_steps,
-            callbacks=callbacks
+            callbacks=callbacks,
+            verbose=1
         )
         
         # Save final model
@@ -385,6 +498,10 @@ def main():
             print(f"Best validation RMSE: {min(history.history['val_rmse']):.4f}")
         if history.history.get('val_mae'):
             print(f"Best validation MAE: {min(history.history['val_mae']):.4f}")
+        if history.history.get('val_r2'):
+            print(f"Best validation R²: {max(history.history['val_r2']):.4f}")
+        if history.history.get('val_mse'):
+            print(f"Best validation MSE: {min(history.history['val_mse']):.4f}")
         
     except Exception as e:
         print(f"Training failed with error: {e}")
