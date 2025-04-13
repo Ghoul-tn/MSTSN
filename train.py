@@ -259,14 +259,14 @@ def main():
     
     # Create datasets
     with strategy.scope():
-        train_ds = create_tf_dataset_v2(
+        train_ds = create_tf_dataset(
             train_feat, train_targ,
             seq_len=args.seq_len,
             batch_size=global_batch_size,
             training=True
         )
         
-        val_ds = create_tf_dataset_v2(
+        val_ds = create_tf_dataset(
             val_feat, val_targ,
             seq_len=args.seq_len,
             batch_size=global_batch_size,
