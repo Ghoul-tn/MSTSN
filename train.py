@@ -282,7 +282,7 @@ def main():
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
             global_clipnorm=0.5,  # Tighter gradient clipping
-            clipvalue=0.3,
+            # clipvalue=0.3,
             epsilon=1e-7  # Numerical stability
         )        
         if args.mixed_precision:
