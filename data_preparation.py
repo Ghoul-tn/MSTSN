@@ -87,6 +87,9 @@ class GambiaDataProcessor:
             targets[t, :] = spi[t, y_idx, x_idx]
 
         # Apply normalizations
+        features[:, :, 0] = (ndvi_processed - 0.15) / 0.35  # NDVI-specific scaling
+        features[:, :, 1] = soil_processed / 100.0          # Soil moisture [0-100] to [0-1]
+        features[:, :, 2] = (lst_processed + 10) / 50.0     # Celsius scaling (assuming -10°C to 40°C range)
         features[:, :, 0] = self.scalers['ndvi'].fit_transform(features[:, :, 0].reshape(-1, 1)).reshape(287, self.num_nodes)
         features[:, :, 1] = self.scalers['soil'].fit_transform(features[:, :, 1].reshape(-1, 1)).reshape(287, self.num_nodes)
         features[:, :, 2] = self.scalers['lst'].fit_transform(features[:, :, 2].reshape(-1, 1)).reshape(287, self.num_nodes)
