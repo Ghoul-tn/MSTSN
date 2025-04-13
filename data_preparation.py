@@ -138,7 +138,7 @@ def create_tf_dataset(features, targets, seq_len=12, batch_size=16, training=Fal
         generator,
         output_signature=output_signature
     )
-
+    dataset = dataset.repeat() 
     # TPU-optimized pipeline with proper repeat
     return dataset \
         .batch(batch_size, drop_remainder=True) \
