@@ -282,7 +282,7 @@ def main():
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
-            global_clipnorm=0.5,  # Tighter gradient clipping
+            global_clipnorm=1.0,  # Tighter gradient clipping
             epsilon=1e-7  # Numerical stability
         )        
         if args.mixed_precision:
@@ -293,9 +293,12 @@ def main():
         
         model.compile(
             optimizer=optimizer,
-            loss=drought_loss,
-            metrics=get_metrics(),
-            steps_per_execution=steps_per_execution
+            loss=tf.keras.losses.MeanSquaredError(),  # Use standard MSE
+            metrics=[
+                tf.keras.metrics.RootMeanSquaredError(name='rmse'),
+                tf.keras.metrics.MeanAbsoluteError(name='mae')
+            ],
+            steps_per_execution=16
         )
 
     # Callbacks
