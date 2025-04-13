@@ -34,7 +34,7 @@ def drought_loss(y_true, y_pred):
     loss = tf.cond(
         tf.equal(tf.size(y_true_masked), 0),
         lambda: tf.constant(0.0, dtype=tf.float32),
-        lambda: tf.keras.losses.mean_squared_error(y_true_masked, y_pred_masked)
+        lambda: tf.keras.losses.MeanSquaredError(y_true_masked, y_pred_masked)
     )
     
     return loss
