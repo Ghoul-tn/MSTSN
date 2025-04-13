@@ -62,43 +62,38 @@ class GraphAttention(layers.Layer):
 class SpatialProcessor(layers.Layer):
     def __init__(self, num_nodes, output_dim, adj_matrix):
         super().__init__()
-        self.num_nodes = num_nodes
-        self.output_dim = output_dim
-        
-        # Store the static adjacency matrix as a constant tensor
-        if isinstance(adj_matrix, scipy.sparse.spmatrix):
-            adj_matrix = adj_matrix.toarray()
+        # Add adjacency matrix normalization
+        adj_matrix = self.normalize_adjacency(adj_matrix)
         self.adj_matrix = tf.constant(adj_matrix, dtype=tf.float32)
         
-        self.gat1 = GraphAttention(output_dim // 4, heads=4, dropout=0.1)
-        self.gat2 = GraphAttention(output_dim, heads=1, dropout=0.1)
-        self.dropout = layers.Dropout(0.1)
-        self.layer_norm = layers.LayerNormalization()
-        self.projection = layers.Dense(output_dim, use_bias=False)
+        # Enhanced GAT layers with residual connections
+        self.gat1 = GraphAttention(output_dim // 2, heads=4)
+        self.gat2 = GraphAttention(output_dim, heads=1)
+        self.dropout = layers.Dropout(0.2)
+        self.layer_norm = layers.LayerNormalization(epsilon=1e-6)
+
+    def normalize_adjacency(self, adj_matrix):
+        """Row-normalize adjacency matrix"""
+        degree = np.sum(adj_matrix, axis=1, keepdims=True)
+        return adj_matrix / (degree + 1e-6)
 
     def call(self, inputs, training=False):
-        # Project inputs for residual connection
-        input_projected = self.projection(inputs)
-        
-        # Apply graph attention layers with static adjacency matrix
         x = self.gat1(inputs, self.adj_matrix, training=training)
-        x = tf.nn.relu(x)
-        x = self.dropout(x, training=training)
+        x = self.dropout(tf.nn.relu(x), training=training)
         x = self.gat2(x, self.adj_matrix, training=training)
-        
-        # Add residual connection
-        return self.layer_norm(x + input_projected)
+        return self.layer_norm(x + inputs)
         
 class TemporalTransformer(layers.Layer):
-    def __init__(self, num_heads, ff_dim, dropout_rate=0.1):
+    def __init__(self, num_heads, ff_dim, dropout_rate=0.2):  # Increased dropout
         super().__init__()
         self.attn = layers.MultiHeadAttention(num_heads, 32)
         self.ffn = tf.keras.Sequential([
             layers.Dense(ff_dim, activation='gelu'),
+            layers.Dropout(dropout_rate),
             layers.Dense(32)
         ])
-        self.layernorm1 = layers.LayerNormalization()
-        self.layernorm2 = layers.LayerNormalization()
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
         self.dropout1 = layers.Dropout(dropout_rate)
         self.dropout2 = layers.Dropout(dropout_rate)
         
@@ -168,8 +163,9 @@ class EnhancedMSTSN(Model):
         temporal_feats = tf.reduce_mean(temporal_out, axis=2)  # [batch, num_nodes, features]
         
         # Apply cross-attention
-        fused = self.cross_attn(spatial_feats, temporal_feats)
-        fused = self.layernorm(fused)
-        fused = self.dropout(fused, training=training)  # Add dropout
+        # fused = self.cross_attn(spatial_feats, temporal_feats)
+        # fused = self.layernorm(fused)
+        # fused = self.dropout(fused, training=training)  # Add dropout
+        fused = self.layernorm(spatial_feats + temporal_feats)
         
         return tf.squeeze(self.final_dense(fused), axis=-1)
