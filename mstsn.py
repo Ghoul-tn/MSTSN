@@ -60,25 +60,47 @@ class GraphAttention(layers.Layer):
         return attention_output
 
 class SpatialProcessor(layers.Layer):
-    def __init__(self, num_nodes, output_dim, adj_matrix):
-        super().__init__()
-        # Initialize projection layer for residual connection
-        self.projection = layers.Dense(output_dim)  # Add this line
+    def __init__(self, num_nodes, output_dim, adj_matrix, **kwargs):
+        super().__init__(**kwargs)
+        self.num_nodes = num_nodes
+        self.output_dim = output_dim
         
-        # Rest of existing code remains the same
+        # Convert and store adjacency matrix as numpy array for serialization
         if scipy.sparse.issparse(adj_matrix):
             adj_matrix = adj_matrix.toarray()
-        adj_matrix = np.asarray(adj_matrix, dtype=np.float32)        
-        if adj_matrix.shape != (num_nodes, num_nodes):
-            raise ValueError(f"Adjacency matrix shape {adj_matrix.shape} doesn't match num_nodes {num_nodes}")        
+        self.adj_matrix_np = np.asarray(adj_matrix, dtype=np.float32)
+        
+        # Create TensorFlow constant
         self.adj_matrix = tf.constant(
-            self.normalize_adjacency(adj_matrix),
+            self.normalize_adjacency(self.adj_matrix_np),
             dtype=tf.float32
         )
+        
+        # Rest of initialization remains the same
+        self.projection = layers.Dense(output_dim)
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
         self.dropout = layers.Dropout(0.2)
         self.layer_norm = layers.LayerNormalization(epsilon=1e-6)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            'num_nodes': self.num_nodes,
+            'output_dim': self.output_dim,
+            'adj_matrix': self.adj_matrix_np.tolist()  # Serialize as list
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        # Convert list back to numpy array
+        adj_matrix = np.array(config['adj_matrix'], dtype=np.float32)
+        return cls(
+            num_nodes=config['num_nodes'],
+            output_dim=config['output_dim'],
+            adj_matrix=adj_matrix
+        )
 
     def normalize_adjacency(self, adj_matrix):
         """Row-normalize adjacency matrix with proper shape checks"""
