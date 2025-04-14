@@ -188,9 +188,9 @@ class EnhancedMSTSN(Model):
         temporal_feats = tf.reduce_mean(temporal_out, axis=2)  # [batch, num_nodes, features]
         
         # Apply cross-attention
-        # fused = self.cross_attn(spatial_feats, temporal_feats)
-        # fused = self.layernorm(fused)
-        # fused = self.dropout(fused, training=training)  # Add dropout
-        fused = self.layernorm(spatial_feats + temporal_feats)
+        fused = self.cross_attn(spatial_feats, temporal_feats)
+        fused = self.layernorm(fused)
+        fused = self.dropout(fused, training=training)  # Add dropout
+        # fused = self.layernorm(spatial_feats + temporal_feats)
         
         return tf.squeeze(self.final_dense(fused), axis=-1)
