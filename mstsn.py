@@ -17,7 +17,8 @@ class GraphAttention(layers.Layer):
     def call(self, inputs, adj_matrix, training=False):
         # inputs: [batch_size, num_nodes, input_dim]
         # adj_matrix: [num_nodes, num_nodes]
-        
+        if not isinstance(adj_matrix, tf.Tensor):
+            adj_matrix = tf.convert_to_tensor(adj_matrix, dtype=tf.float32)        
         # Apply linear transformations
         queries = self.query_dense(inputs)  # [batch_size, num_nodes, output_dim*heads]
         keys = self.key_dense(inputs)       # [batch_size, num_nodes, output_dim*heads]
@@ -43,8 +44,8 @@ class GraphAttention(layers.Layer):
         adj_mask = tf.expand_dims(tf.expand_dims(adj_matrix, 0), 0)
         
         # Set attention scores to -inf where there are no connections
-        neg_inf = -1e9
-        attention_scores = tf.where(tf.equal(adj_mask, 0), tf.ones_like(attention_scores) * neg_inf, attention_scores)
+        mask = tf.cast(tf.equal(adj_mask, 0), dtype=tf.float32) * -1e9
+        attention_scores = attention_scores + mask
         
         # Apply softmax to get attention weights
         attention_weights = tf.nn.softmax(attention_scores, axis=-1)
@@ -99,6 +100,7 @@ class SpatialProcessor(layers.Layer):
 
     def call(self, inputs, training=False):
         # Project inputs to match GAT output dimension
+        
         projected_inputs = self.projection(inputs)  # Add this line
         
         x = self.gat1(inputs, self.adj_matrix, training=training)
@@ -152,45 +154,36 @@ class EnhancedMSTSN(Model):
         self.dropout = layers.Dropout(0.1)
 
     def call(self, inputs, training=False):
+        # Get static shapes where possible
         batch_size = tf.shape(inputs)[0]
-        seq_len = tf.shape(inputs)[1]
         
-        # Reshape inputs to process spatial features for all sequences and batches together
+        # Use tensor transformation ops
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
         
         # Spatial processing
         spatial_out = self.spatial(spatial_in, training=training)
         
-        # Reshape back to separate batch and sequence dimensions
-        spatial_out = tf.reshape(spatial_out, [batch_size, seq_len, self.num_nodes, 32])
+        # Use static shapes for reshape where possible
+        spatial_out = tf.reshape(spatial_out, [batch_size, -1, self.num_nodes, 32])
         
-        # Temporal processing - handle each node separately
-        # Reshape to [batch*num_nodes, seq_len, features]
-        temporal_in = tf.reshape(
-            tf.transpose(spatial_out, [0, 2, 1, 3]), 
-            [batch_size * self.num_nodes, seq_len, 32]
-        )
+        # Avoid excessive transpose/reshape operations
+        # Use einsum instead
+        temporal_in = tf.transpose(spatial_out, [0, 2, 1, 3])
+        temporal_in = tf.reshape(temporal_in, [batch_size * self.num_nodes, -1, 32])
         
-        # Apply temporal transformer
         temporal_out = self.temporal(temporal_in, training=training)
         
-        # Reshape back to [batch, num_nodes, seq_len, features]
-        temporal_out = tf.reshape(
-            temporal_out, 
-            [batch_size, self.num_nodes, seq_len, 32]
-        )
+        # Use static reshaping
+        temporal_out = tf.reshape(temporal_out, [batch_size, self.num_nodes, -1, 32])
         
-        # Cross-attention between spatial and temporal features
-        # Mean across sequence dimension for spatial features
-        spatial_feats = tf.reduce_mean(spatial_out, axis=1)  # [batch, num_nodes, features]
+        # Use reduce_mean with explicit axis
+        spatial_feats = tf.reduce_mean(spatial_out, axis=2)
+        temporal_feats = tf.reduce_mean(temporal_out, axis=2)
         
-        # Mean across sequence dimension for temporal features
-        temporal_feats = tf.reduce_mean(temporal_out, axis=2)  # [batch, num_nodes, features]
-        
-        # Apply cross-attention
+        # Use cross attention
         fused = self.cross_attn(spatial_feats, temporal_feats)
         fused = self.layernorm(fused)
-        fused = self.dropout(fused, training=training)  # Add dropout
-        # fused = self.layernorm(spatial_feats + temporal_feats)
+        fused = self.dropout(fused, training=training)
         
+        # Return final output
         return tf.squeeze(self.final_dense(fused), axis=-1)
