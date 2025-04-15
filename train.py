@@ -425,7 +425,7 @@ def main():
             min_lr=1e-6,
             verbose=1
         ),
-        NanGradientTerminator(),
+        # NanGradientTerminator(),
         GradientNormMonitor(log_frequency=5, threshold=50.0)         
     ]
     # callbacks.append(NanGradientTerminator())
