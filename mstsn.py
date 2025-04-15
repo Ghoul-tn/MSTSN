@@ -129,12 +129,6 @@ class SpatialProcessor(layers.Layer):
 
     def call(self, inputs, training=False):
         # Project inputs to match GAT output dimension
-        projected_inputs = self.projection(inputs)  # Add this line
-        
-        x = self.gat1(inputs, self.adj_matrix, training=training)
-        x = self.dropout(tf.nn.relu(x), training=training)
-        x = self.gat2(x, self.adj_matrix, training=training)
-        
         # Add projected inputs instead of original inputs
         projected_inputs = self.projection(inputs)
         x = self.gat1(inputs, self.adj_matrix, training=training)
