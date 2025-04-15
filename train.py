@@ -311,10 +311,10 @@ def main():
             restore_best_weights=True
         ),
         tf.keras.callbacks.ModelCheckpoint(
-            filepath=os.path.join(args.results_dir, 'best_model.keras'),
-            save_format='keras',  # Explicit format
+            filepath=os.path.join(args.results_dir, 'best_model.h5'),
             monitor='val_rmse',
-            save_best_only=True
+            save_best_only=True,
+            save_weights_only=False
         ),
         tf.keras.callbacks.CSVLogger(
             os.path.join(args.results_dir, 'training_log.csv')
