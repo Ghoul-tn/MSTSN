@@ -47,7 +47,7 @@ def parse_args():
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=16)  # Good default for ~2000 pixels
     parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--lr', type=float, default=5e-6)
     parser.add_argument('--weight_decay', type=float, default=1e-3)
     parser.add_argument('--alpha', type=float, default=3.0,
                       help='Weight for drought-specific loss component')
@@ -167,6 +167,11 @@ def configure_tpu_options():
     tf.config.set_soft_device_placement(True)
     print("Enabled soft device placement for TPU compatibility")
 
+class NanGradientTerminator(tf.keras.callbacks.Callback):
+    def on_batch_end(self, batch, logs=None):
+        if np.isnan(logs.get('loss')):
+            print(f"\nNaN loss detected at batch {batch}, terminating training")
+            self.model.stop_training = True
 
 def main():
     args = parse_args()
@@ -282,8 +287,8 @@ def main():
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
             weight_decay=args.weight_decay,
-            global_clipnorm=1.0,  # Tighter gradient clipping
-            epsilon=1e-7  # Numerical stability
+            global_clipnorm=0.5,  # REDUCE from 1.0 to 0.5
+            epsilon=1e-5  # INCREASE from 1e-7 for better stability
         )        
         if args.mixed_precision:
             optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, initial_scale=2**12)
@@ -327,6 +332,7 @@ def main():
             verbose=1
         )
     ]
+    callbacks.append(NanGradientTerminator())
     # Train model with explicit steps
     try:
         print("\nStarting model training...")
