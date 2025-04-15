@@ -86,7 +86,12 @@ class SpatialProcessor(layers.Layer):
         
         # Store normalization parameters
         self._normalized_adj = self.normalize_adjacency(self.adj_matrix_np)
-        
+        self.adj_matrix = tf.constant(
+            self._normalized_adj,
+            dtype=tf.float32,
+            shape=self._normalized_adj.shape,
+            name='adj_matrix'
+        )        
         # Layer components
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
