@@ -36,14 +36,15 @@ class GraphAttention(layers.Layer):
         attention_scores = tf.einsum('bihd,bjhd->bhij', queries, keys)
         
         # Scale attention scores
-        attention_scores = attention_scores / tf.sqrt(tf.cast(self.output_dim, tf.float32))
+        scale_factor = tf.math.sqrt(tf.cast(self.output_dim, tf.float32) + 1e-6)
+        attention_scores = attention_scores / scale_factor
         
         # Apply adjacency matrix as mask
         # [1, 1, num_nodes, num_nodes]
         adj_mask = tf.expand_dims(tf.expand_dims(adj_matrix, 0), 0)
         
         # Set attention scores to -inf where there are no connections
-        neg_inf = -1e9
+        neg_inf = -1e4
         attention_scores = tf.where(tf.equal(adj_mask, 0), tf.ones_like(attention_scores) * neg_inf, attention_scores)
         
         # Apply softmax to get attention weights
