@@ -69,7 +69,7 @@ def configure_distribute_strategy(use_tpu=True):
     if use_tpu:
         try:
             print("Attempting to initialize TPU...")
-            tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+            tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
             tf.config.experimental_connect_to_cluster(tpu)
             tf.tpu.experimental.initialize_tpu_system(tpu)
             strategy = tf.distribute.TPUStrategy(tpu)
