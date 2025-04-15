@@ -34,7 +34,9 @@ def drought_loss(y_true, y_pred):
     squared_errors = tf.square(y_true_masked - y_pred_masked)
     sum_squared = tf.reduce_sum(squared_errors)
     count = tf.cast(tf.size(y_true_masked), tf.float32) + tf.keras.backend.epsilon()
-    
+    if tf.math.is_nan(sum_squared) or tf.math.is_inf(sum_squared):
+        tf.print("Warning: NaN or Inf in loss computation!")
+        return 0.1  # Return a small placeholder loss instead of NaN
     return sum_squared / count
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Enhanced MSTSN for Drought Prediction (TensorFlow)')
