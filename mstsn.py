@@ -65,23 +65,30 @@ class SpatialProcessor(layers.Layer):
         self.num_nodes = num_nodes
         self.output_dim = output_dim
         
-        # Convert and store adjacency matrix as numpy array for serialization
+        # Convert adjacency matrix to numpy array for serialization
         if scipy.sparse.issparse(adj_matrix):
             adj_matrix = adj_matrix.toarray()
         self.adj_matrix_np = np.asarray(adj_matrix, dtype=np.float32)
         
-        # Create TensorFlow constant
-        self.adj_matrix = tf.constant(
-            self.normalize_adjacency(self.adj_matrix_np),
-            dtype=tf.float32
-        )
-        
-        # Rest of initialization remains the same
+        # Initialize projection layer
         self.projection = layers.Dense(output_dim)
+        
+        # Store normalization parameters
+        self._normalized_adj = self.normalize_adjacency(self.adj_matrix_np)
+        
+        # Layer components
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
         self.dropout = layers.Dropout(0.2)
         self.layer_norm = layers.LayerNormalization(epsilon=1e-6)
+
+    def build(self, input_shape):
+        # Create TF constant during build phase
+        self.adj_matrix = tf.constant(
+            self._normalized_adj,
+            dtype=tf.float32
+        )
+        super().build(input_shape)
 
     def get_config(self):
         config = super().get_config()
@@ -94,13 +101,14 @@ class SpatialProcessor(layers.Layer):
 
     @classmethod
     def from_config(cls, config):
-        # Convert list back to numpy array
+        # Convert list back to numpy array and reconstruct
         adj_matrix = np.array(config['adj_matrix'], dtype=np.float32)
         return cls(
             num_nodes=config['num_nodes'],
             output_dim=config['output_dim'],
             adj_matrix=adj_matrix
         )
+
 
     def normalize_adjacency(self, adj_matrix):
         """Row-normalize adjacency matrix with proper shape checks"""
@@ -128,7 +136,12 @@ class SpatialProcessor(layers.Layer):
         x = self.gat2(x, self.adj_matrix, training=training)
         
         # Add projected inputs instead of original inputs
-        return self.layer_norm(x + projected_inputs)  # Modified this line
+        projected_inputs = self.projection(inputs)
+        x = self.gat1(inputs, self.adj_matrix, training=training)
+        x = self.dropout(tf.nn.relu(x), training=training)
+        x = self.gat2(x, self.adj_matrix, training=training)
+        return self.layer_norm(x + projected_inputs)
+
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.2):  # Increased dropout
