@@ -428,7 +428,7 @@ def main():
         NanGradientTerminator(),
         GradientNormMonitor(log_frequency=5, threshold=50.0)         
     ]
-    callbacks.append(NanGradientTerminator())
+    # callbacks.append(NanGradientTerminator())
     # Train model with explicit steps
     try:
         print("\nStarting model training...")
