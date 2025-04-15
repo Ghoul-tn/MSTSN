@@ -4,26 +4,15 @@ import numpy as np
 import scipy.sparse
 
 class GraphAttention(layers.Layer):
-    def __init__(self, output_dim, heads=1, dropout=0.1, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, output_dim, heads=1, dropout=0.1):
+        super().__init__()
         self.output_dim = output_dim
         self.heads = heads
         self.dropout = dropout
-        
-        # Trainable weights
         self.query_dense = layers.Dense(output_dim * heads)
         self.key_dense = layers.Dense(output_dim * heads)
         self.value_dense = layers.Dense(output_dim * heads)
         self.dropout_layer = layers.Dropout(dropout)
-
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            'output_dim': self.output_dim,
-            'heads': self.heads,
-            'dropout': self.dropout
-        })
-        return config
 
     def call(self, inputs, adj_matrix, training=False):
         # inputs: [batch_size, num_nodes, input_dim]
@@ -71,60 +60,25 @@ class GraphAttention(layers.Layer):
         return attention_output
 
 class SpatialProcessor(layers.Layer):
-    def __init__(self, num_nodes, output_dim, adj_matrix, **kwargs):
-        super().__init__(**kwargs)
-        self.num_nodes = num_nodes
-        self.output_dim = output_dim
+    def __init__(self, num_nodes, output_dim, adj_matrix):
+        super().__init__()
+        # Initialize projection layer for residual connection
+        self.projection = layers.Dense(output_dim)  # Add this line
         
-        # Convert adjacency matrix to numpy array for serialization
+        # Rest of existing code remains the same
         if scipy.sparse.issparse(adj_matrix):
             adj_matrix = adj_matrix.toarray()
-        self.adj_matrix_np = np.asarray(adj_matrix, dtype=np.float32)
-        
-        # Initialize projection layer
-        self.projection = layers.Dense(output_dim)
-        
-        # Store normalization parameters
-        self._normalized_adj = self.normalize_adjacency(self.adj_matrix_np)
+        adj_matrix = np.asarray(adj_matrix, dtype=np.float32)        
+        if adj_matrix.shape != (num_nodes, num_nodes):
+            raise ValueError(f"Adjacency matrix shape {adj_matrix.shape} doesn't match num_nodes {num_nodes}")        
         self.adj_matrix = tf.constant(
-            self._normalized_adj,
-            dtype=tf.float32,
-            shape=self._normalized_adj.shape,
-            name='adj_matrix'
-        )        
-        # Layer components
+            self.normalize_adjacency(adj_matrix),
+            dtype=tf.float32
+        )
         self.gat1 = GraphAttention(output_dim // 2, heads=4)
         self.gat2 = GraphAttention(output_dim, heads=1)
         self.dropout = layers.Dropout(0.2)
         self.layer_norm = layers.LayerNormalization(epsilon=1e-6)
-
-    def build(self, input_shape):
-        # Create TF constant during build phase
-        self.adj_matrix = tf.constant(
-            self._normalized_adj,
-            dtype=tf.float32
-        )
-        super().build(input_shape)
-
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            'num_nodes': self.num_nodes,
-            'output_dim': self.output_dim,
-            'adj_matrix': self.adj_matrix_np.tolist()  # Serialize as list
-        })
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        # Convert list back to numpy array and reconstruct
-        adj_matrix = np.array(config['adj_matrix'], dtype=np.float32)
-        return cls(
-            num_nodes=config['num_nodes'],
-            output_dim=config['output_dim'],
-            adj_matrix=adj_matrix
-        )
-
 
     def normalize_adjacency(self, adj_matrix):
         """Row-normalize adjacency matrix with proper shape checks"""
@@ -144,13 +98,15 @@ class SpatialProcessor(layers.Layer):
         return adj_matrix / (degree + 1e-6)
 
     def call(self, inputs, training=False):
-        with tf.device('/job:localhost/replica:0/task:0/device:TPU:0'):
-            projected_inputs = self.projection(inputs)
-            x = self.gat1(inputs, self.adj_matrix, training=training)
-            x = self.dropout(tf.nn.relu(x), training=training)
-            x = self.gat2(x, self.adj_matrix, training=training)
-            return self.layer_norm(x + projected_inputs)
-
+        # Project inputs to match GAT output dimension
+        projected_inputs = self.projection(inputs)  # Add this line
+        
+        x = self.gat1(inputs, self.adj_matrix, training=training)
+        x = self.dropout(tf.nn.relu(x), training=training)
+        x = self.gat2(x, self.adj_matrix, training=training)
+        
+        # Add projected inputs instead of original inputs
+        return self.layer_norm(x + projected_inputs)  # Modified this line
         
 class TemporalTransformer(layers.Layer):
     def __init__(self, num_heads, ff_dim, dropout_rate=0.2):  # Increased dropout
