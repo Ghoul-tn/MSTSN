@@ -43,9 +43,9 @@ class GraphAttention(layers.Layer):
         adj_mask = tf.expand_dims(tf.expand_dims(adj_matrix, 0), 0)
         
         # Set attention scores to -inf where there are no connections
-        neg_inf = -1e9
+        neg_inf = -1e4
         attention_scores = tf.where(tf.equal(adj_mask, 0), tf.ones_like(attention_scores) * neg_inf, attention_scores)
-        
+        attention_scores = tf.clip_by_value(attention_scores, -5.0, 5.0)
         # Apply softmax to get attention weights
         attention_weights = tf.nn.softmax(attention_scores, axis=-1)
         attention_weights = self.dropout_layer(attention_weights, training=training)
@@ -94,8 +94,9 @@ class SpatialProcessor(layers.Layer):
             raise ValueError(f"Adjacency matrix must be square, got shape {adj_matrix.shape}")
     
         # Calculate degree matrix
-        degree = np.sum(adj_matrix, axis=1, keepdims=True)  # Keep dimensions for broadcasting
-        return adj_matrix / (degree + 1e-6)
+        degree = np.sum(adj_matrix, axis=1, keepdims=True)
+        # Add a larger epsilon and use np.clip to prevent extreme values
+        return np.clip(adj_matrix / (degree + 1e-5), 0.0, 10.0)
 
     def call(self, inputs, training=False):
         # Project inputs to match GAT output dimension
@@ -140,14 +141,16 @@ class EnhancedMSTSN(Model):
         self.cross_attn = layers.MultiHeadAttention(
             num_heads=2, 
             key_dim=32,
-            kernel_initializer='glorot_uniform'  # Explicit initialization
+            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=42),
+            kernel_constraint=tf.keras.constraints.MaxNorm(3.0)  # Add constraints
         )
         self.final_dense = layers.Dense(
             1,
             kernel_initializer=tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01)
         )
         self.layernorm = layers.LayerNormalization(epsilon=1e-6)
-        
+        self.bn1 = layers.BatchNormalization()
+        self.bn2 = layers.BatchNormalization()
         # Add small dropout for regularization
         self.dropout = layers.Dropout(0.1)
 
@@ -157,7 +160,7 @@ class EnhancedMSTSN(Model):
         
         # Reshape inputs to process spatial features for all sequences and batches together
         spatial_in = tf.reshape(inputs, [-1, self.num_nodes, 3])
-        
+        spatial_in = self.bn1(spatial_in)
         # Spatial processing
         spatial_out = self.spatial(spatial_in, training=training)
         
@@ -170,7 +173,7 @@ class EnhancedMSTSN(Model):
             tf.transpose(spatial_out, [0, 2, 1, 3]), 
             [batch_size * self.num_nodes, seq_len, 32]
         )
-        
+        temporal_in = self.bn2(temporal_in)
         # Apply temporal transformer
         temporal_out = self.temporal(temporal_in, training=training)
         
