@@ -144,13 +144,12 @@ class SpatialProcessor(layers.Layer):
         return adj_matrix / (degree + 1e-6)
 
     def call(self, inputs, training=False):
-        # Project inputs to match GAT output dimension
-        # Add projected inputs instead of original inputs
-        projected_inputs = self.projection(inputs)
-        x = self.gat1(inputs, self.adj_matrix, training=training)
-        x = self.dropout(tf.nn.relu(x), training=training)
-        x = self.gat2(x, self.adj_matrix, training=training)
-        return self.layer_norm(x + projected_inputs)
+        with tf.device('/job:localhost/replica:0/task:0/device:TPU:0'):
+            projected_inputs = self.projection(inputs)
+            x = self.gat1(inputs, self.adj_matrix, training=training)
+            x = self.dropout(tf.nn.relu(x), training=training)
+            x = self.gat2(x, self.adj_matrix, training=training)
+            return self.layer_norm(x + projected_inputs)
 
         
 class TemporalTransformer(layers.Layer):
