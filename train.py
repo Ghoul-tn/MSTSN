@@ -169,11 +169,11 @@ def configure_tpu_options():
     tf.config.set_soft_device_placement(True)
     print("Enabled soft device placement for TPU compatibility")
 
-class NanGradientTerminator(tf.keras.callbacks.Callback):
-    def on_batch_end(self, batch, logs=None):
-        if np.isnan(logs.get('loss')):
-            print(f"\nNaN loss detected at batch {batch}, terminating training")
-            self.model.stop_training = True
+# class NanGradientTerminator(tf.keras.callbacks.Callback):
+#     def on_batch_end(self, batch, logs=None):
+#         if np.isnan(logs.get('loss')):
+#             print(f"\nNaN loss detected at batch {batch}, terminating training")
+#             self.model.stop_training = True
 
 class GradientNormMonitor(tf.keras.callbacks.Callback):
     def __init__(self, log_frequency=10, threshold=100.0):
