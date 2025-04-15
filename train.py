@@ -295,13 +295,7 @@ def main():
         # Compile with reasonable steps_per_execution for TPU
         steps_per_execution = min(16, max(1, steps_per_epoch // 10)) if using_tpu else 1
         print(f"Using steps_per_execution: {steps_per_execution}")
-        if using_tpu:
-            # Add TPU-specific options
-            jit_compile = True
-            steps_per_execution = 8  # Try a smaller value than 16
-        else:
-            jit_compile = False
-            steps_per_execution = 1        
+      
         model.compile(
             optimizer=optimizer,
             loss=tf.keras.losses.MeanSquaredError(),  # Use standard MSE
@@ -310,7 +304,7 @@ def main():
                 tf.keras.metrics.MeanAbsoluteError(name='mae')
             ],
             steps_per_execution=steps_per_execution,
-            jit_compile=jit_compile
+            jit_compile=False
         )
 
     # Callbacks
