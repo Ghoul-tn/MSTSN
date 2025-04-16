@@ -43,7 +43,7 @@ def parse_args():
     
     # Data parameters
     parser.add_argument('--data_path', type=str,
-                      default='/kaggle/input/time-series-gambia-wuli/time_series_wuli/Gambia,_The_Wuli/Gambia,_The_wuli_combined.npz')
+                      default='/kaggle/input/gambia-upper-river-time-series/Gambia_The_combined.npz')
     parser.add_argument('--seq_len', type=int, default=12)
     
     # Training parameters
@@ -175,96 +175,96 @@ def configure_tpu_options():
 #             print(f"\nNaN loss detected at batch {batch}, terminating training")
 #             self.model.stop_training = True
 
-class GradientNormMonitor(tf.keras.callbacks.Callback):
-    def __init__(self, log_frequency=10, threshold=100.0):
-        """
-        Monitor gradient norms during training to catch potential explosions.
+# class GradientNormMonitor(tf.keras.callbacks.Callback):
+#     def __init__(self, log_frequency=10, threshold=100.0):
+#         """
+#         Monitor gradient norms during training to catch potential explosions.
         
-        Args:
-            log_frequency: Log gradient norms every N batches
-            threshold: Alert when gradient norm exceeds this value
-        """
-        super().__init__()
-        self.log_frequency = log_frequency
-        self.threshold = threshold
-        self.batch_gradients = []
-        self.gradient_norms = []
-        self.layer_norms = {}
+#         Args:
+#             log_frequency: Log gradient norms every N batches
+#             threshold: Alert when gradient norm exceeds this value
+#         """
+#         super().__init__()
+#         self.log_frequency = log_frequency
+#         self.threshold = threshold
+#         self.batch_gradients = []
+#         self.gradient_norms = []
+#         self.layer_norms = {}
         
-    def on_train_begin(self, logs=None):
-        # Store the original train_step function
-        self.original_train_step = self.model.train_step
+#     def on_train_begin(self, logs=None):
+#         # Store the original train_step function
+#         self.original_train_step = self.model.train_step
         
-        # Define a custom train_step to capture gradients
-        def train_step_with_grad_logging(data):
-            with tf.GradientTape() as tape:
-                # Use the model's normal training logic
-                result = self.original_train_step(data)
+#         # Define a custom train_step to capture gradients
+#         def train_step_with_grad_logging(data):
+#             with tf.GradientTape() as tape:
+#                 # Use the model's normal training logic
+#                 result = self.original_train_step(data)
                 
-            # Get the trainable weights
-            weights = self.model.trainable_weights
+#             # Get the trainable weights
+#             weights = self.model.trainable_weights
             
-            # Compute gradients
-            with tape.stop_recording():
-                loss = self.model.compiled_loss(
-                    y_pred=result['predictions'] if isinstance(result, dict) else result,
-                    y_true=data[1],
-                    regularization_losses=self.model.losses
-                )
+#             # Compute gradients
+#             with tape.stop_recording():
+#                 loss = self.model.compiled_loss(
+#                     y_pred=result['predictions'] if isinstance(result, dict) else result,
+#                     y_true=data[1],
+#                     regularization_losses=self.model.losses
+#                 )
             
-            # Get gradients and calculate norm
-            gradients = tape.gradient(loss, weights)
-            gradient_norm = tf.linalg.global_norm(gradients)
+#             # Get gradients and calculate norm
+#             gradients = tape.gradient(loss, weights)
+#             gradient_norm = tf.linalg.global_norm(gradients)
             
-            # Store for later analysis
-            self.current_batch_gradients = gradients
-            self.current_gradient_norm = gradient_norm
+#             # Store for later analysis
+#             self.current_batch_gradients = gradients
+#             self.current_gradient_norm = gradient_norm
             
-            # Check for NaN/Inf in gradients
-            any_nan = any(tf.reduce_any(tf.math.is_nan(g)) for g in gradients if g is not None)
-            any_inf = any(tf.reduce_any(tf.math.is_inf(g)) for g in gradients if g is not None)
+#             # Check for NaN/Inf in gradients
+#             any_nan = any(tf.reduce_any(tf.math.is_nan(g)) for g in gradients if g is not None)
+#             any_inf = any(tf.reduce_any(tf.math.is_inf(g)) for g in gradients if g is not None)
             
-            if any_nan or any_inf or gradient_norm > self.threshold:
-                print(f"\n⚠️ WARNING: Found {'NaN' if any_nan else 'Inf' if any_inf else 'Large'} gradients!")
-                print(f"  Gradient norm: {gradient_norm.numpy():.4f}")
+#             if any_nan or any_inf or gradient_norm > self.threshold:
+#                 print(f"\n⚠️ WARNING: Found {'NaN' if any_nan else 'Inf' if any_inf else 'Large'} gradients!")
+#                 print(f"  Gradient norm: {gradient_norm.numpy():.4f}")
                 
-                # Log per-layer gradient norms to identify the problematic layer
-                if gradient_norm > self.threshold:
-                    print("\nPer-layer gradient norms:")
-                    for i, (w, g) in enumerate(zip(weights, gradients)):
-                        if g is not None:
-                            layer_name = w.name
-                            g_norm = tf.linalg.global_norm([g]).numpy()
-                            print(f"  {layer_name}: {g_norm:.4f}")
+#                 # Log per-layer gradient norms to identify the problematic layer
+#                 if gradient_norm > self.threshold:
+#                     print("\nPer-layer gradient norms:")
+#                     for i, (w, g) in enumerate(zip(weights, gradients)):
+#                         if g is not None:
+#                             layer_name = w.name
+#                             g_norm = tf.linalg.global_norm([g]).numpy()
+#                             print(f"  {layer_name}: {g_norm:.4f}")
             
-            return result
+#             return result
         
-        # Replace the train_step with our custom version
-        self.model.train_step = train_step_with_grad_logging
+#         # Replace the train_step with our custom version
+#         self.model.train_step = train_step_with_grad_logging
     
-    def on_batch_end(self, batch, logs=None):
-        # Only log every N batches to avoid too much output
-        if hasattr(self, 'current_gradient_norm') and batch % self.log_frequency == 0:
-            norm = self.current_gradient_norm.numpy()
-            self.gradient_norms.append(norm)
-            print(f"\nBatch {batch} - Gradient Norm: {norm:.4f}")
+#     def on_batch_end(self, batch, logs=None):
+#         # Only log every N batches to avoid too much output
+#         if hasattr(self, 'current_gradient_norm') and batch % self.log_frequency == 0:
+#             norm = self.current_gradient_norm.numpy()
+#             self.gradient_norms.append(norm)
+#             print(f"\nBatch {batch} - Gradient Norm: {norm:.4f}")
             
-            # Store for later analysis
-            if hasattr(self, 'current_batch_gradients'):
-                self.batch_gradients.append(batch)
+#             # Store for later analysis
+#             if hasattr(self, 'current_batch_gradients'):
+#                 self.batch_gradients.append(batch)
     
-    def on_train_end(self, logs=None):
-        # Restore the original train_step
-        if hasattr(self, 'original_train_step'):
-            self.model.train_step = self.original_train_step
+#     def on_train_end(self, logs=None):
+#         # Restore the original train_step
+#         if hasattr(self, 'original_train_step'):
+#             self.model.train_step = self.original_train_step
         
-        # Print summary statistics
-        if self.gradient_norms:
-            print("\n=== Gradient Norm Summary ===")
-            print(f"Min: {min(self.gradient_norms):.4f}")
-            print(f"Max: {max(self.gradient_norms):.4f}")
-            print(f"Mean: {sum(self.gradient_norms)/len(self.gradient_norms):.4f}")
-            print(f"Exceeded threshold ({self.threshold}) in {sum(1 for n in self.gradient_norms if n > self.threshold)} batches")
+#         # Print summary statistics
+#         if self.gradient_norms:
+#             print("\n=== Gradient Norm Summary ===")
+#             print(f"Min: {min(self.gradient_norms):.4f}")
+#             print(f"Max: {max(self.gradient_norms):.4f}")
+#             print(f"Mean: {sum(self.gradient_norms)/len(self.gradient_norms):.4f}")
+#             print(f"Exceeded threshold ({self.threshold}) in {sum(1 for n in self.gradient_norms if n > self.threshold)} batches")
 
 def main():
     args = parse_args()
@@ -426,7 +426,7 @@ def main():
             verbose=1
         ),
         # NanGradientTerminator(),
-        GradientNormMonitor(log_frequency=5, threshold=50.0)         
+        # GradientNormMonitor(log_frequency=5, threshold=50.0)         
     ]
     # callbacks.append(NanGradientTerminator())
     # Train model with explicit steps
