@@ -43,7 +43,7 @@ def parse_args():
     
     # Data parameters
     parser.add_argument('--data_path', type=str,
-                      default='/kaggle/input/gambia-upper-river-time-series/Gambia_The_combined.npz')
+                      default='/kaggle/input/time-series-gambia-wuli/time_series_wuli/Gambia,_The_Wuli/Gambia,_The_wuli_combined.npz')
     parser.add_argument('--seq_len', type=int, default=12)
     
     # Training parameters
