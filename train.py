@@ -71,7 +71,7 @@ def configure_distribute_strategy(use_tpu=True):
     if use_tpu:
         try:
             print("Attempting to initialize TPU...")
-            tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+            tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
             tf.config.experimental_connect_to_cluster(tpu)
             tf.tpu.experimental.initialize_tpu_system(tpu)
             strategy = tf.distribute.TPUStrategy(tpu)
@@ -357,7 +357,7 @@ def main():
         # Create a small dummy input with the correct dimensions for testing
         print("Creating dummy input for model verification...")
         try:
-            # Create dummy input
+            # Use small batch size and sequence length for testing
             dummy_batch_size = 2
             dummy_seq_len = 12
             dummy_input = tf.zeros([dummy_batch_size, dummy_seq_len, processor.num_nodes, 3], dtype=tf.float32)
@@ -367,17 +367,15 @@ def main():
             print("Testing forward pass...")
             output = model(dummy_input)
             print(f"Forward pass successful! Output shape: {output.shape}")
-            
-            # Only call summary if the model was built successfully
-            model.build(input_shape=(None, args.seq_len, processor.num_nodes, 3))
-            model.summary()
         except Exception as e:
             print(f"Error during model verification: {e}")
             import traceback
             traceback.print_exc()
-            print("Model couldn't be summarized correctly, but will try to continue training.")
+            print("Model couldn't be initialized correctly. Please fix the errors above.")
+            return
+        
         # If we get here, model initialization succeeded
-        # model.summary()
+        model.summary()
         
         optimizer = tf.keras.optimizers.AdamW(
             learning_rate=lr_schedule,
