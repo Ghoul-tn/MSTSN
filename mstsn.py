@@ -196,4 +196,11 @@ class EnhancedMSTSN(Model):
         fused = self.dropout(fused, training=training)  # Add dropout
         # fused = self.layernorm(spatial_feats + temporal_feats)
         
-        return tf.squeeze(self.final_dense(fused), axis=-1)
+        output = self.final_dense(fused)
+        if output is None:
+            raise ValueError("Model output is None. Check the fused tensor and final_dense layer.")
+        
+        output = tf.squeeze(output, axis=-1)
+        # Add shape verification
+        tf.debugging.assert_rank_at_least(output, 2, "Output must be at least rank 2")
+        return output
